@@ -17,7 +17,7 @@ import java.util.jar.JarFile;
 public final class DakotaAC extends JavaPlugin {
 
     private static final String PREFIX = "§4§lDAC §c";
-    private static final String BASE_PACKAGE_PATH = "ro/skypixel/play/dakotaAC"; // Base package for scanning listeners
+    private static final String BASE_PACKAGE_PATH = "ro/skypixel/play/dakotaAC";
 
     // Punishment manager instance (assuming it's defined elsewhere or you'll add it)
     // private Punishment punishment; // Uncomment if you have a Punishment class
