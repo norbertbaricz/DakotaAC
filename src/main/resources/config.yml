@@ -1,0 +1,4 @@
+# DakotaAC Configuration File
+
+# The Violence Level (VL) threshold at which a player receives a temporary 24-hour ban
+ban-threshold: 500

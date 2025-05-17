@@ -1,0 +1,20 @@
+name: DakotaAC
+version: '0.16'
+main: ro.skypixel.play.dakotaAC.DakotaAC
+api-version: '1.21'
+authors: [ MaxUltimat3 ]
+depend: [ ]
+description: A powerful anti-cheat plugin for Minecraft, designed to protect your server from hackers with minimal performance impact.
+website: https://skypixel.ro/dakotaac
+commands:
+  dakotaac:
+    description: Main command for DakotaAC anti-cheat plugin
+    usage: /<command> [help|version|status|reload]
+    aliases: [ dac ]
+permissions:
+  dakotaac.admin:
+    description: Grants access to administrative commands like reload
+    default: op
+  dakotaac.use:
+    description: Allows access to basic DakotaAC commands (help, version, status)
+    default: true

@@ -1,0 +1,8 @@
+<component name="ArtifactManager">
+  <artifact type="jar" build-on-make="true" name="DakotaAC:jar">
+    <output-path>$PROJECT_DIR$/../Minecraft/plugins</output-path>
+    <root id="archive" name="DakotaAC.jar">
+      <element id="module-output" name="DakotaAC" />
+    </root>
+  </artifact>
+</component>
