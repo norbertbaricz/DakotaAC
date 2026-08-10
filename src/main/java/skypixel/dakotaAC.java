@@ -1,12 +1,14 @@
 package skypixel;
 
 import org.bukkit.plugin.java.JavaPlugin;
+import com.comphenix.protocol.ProtocolLibrary;
 import skypixel.Combat.*;
 import skypixel.Exploit.*;
 import skypixel.Fun.*;
 import skypixel.Misc.*;
 import skypixel.Movement.*;
 import skypixel.Notification.*;
+import skypixel.Commands.*;
 import skypixel.Player.*;
 import skypixel.Render.*;
 import skypixel.World.*;
@@ -66,8 +68,13 @@ public final class dakotaAC extends JavaPlugin {
         registerListeners();
 
         // 3. Înregistrăm Comenzile
-        getCommand("dakotaac").setExecutor(new command());
-        getCommand("dakotaac").setTabCompleter(new command());
+        // Înregistrăm comanda /report
+        getCommand("report").setExecutor(new Report());
+        getCommand("report").setTabCompleter(new Report());
+
+        // Înregistrăm comanda /dakotaac
+        getCommand("dakotaac").setExecutor(new Dakota());
+        getCommand("dakotaac").setTabCompleter(new Dakota());
 
         // Mesajul de succes din consolă
         console.sendMessage(org.bukkit.ChatColor.GREEN + " [System] All modules loaded successfully. Zero errors.");
@@ -88,6 +95,11 @@ public final class dakotaAC extends JavaPlugin {
         skypixel.Render.ESP.cleanupAll();
         skypixel.Misc.AntiBot.cleanupAllBots();
         skypixel.Combat.AutoArmor.cleanupAllDecoys(); // Adaugat cleanup-ul proaspat pentru AutoArmor!
+
+        // 1. Ștergem listener-ele din ProtocolLib pentru a preveni erorile de la PlugManX
+        if (getServer().getPluginManager().getPlugin("ProtocolLib") != null) {
+            ProtocolLibrary.getProtocolManager().removePacketListeners(this);
+        }
 
         // --- SHUTDOWN UI ÎN CONSOLĂ ---
         console.sendMessage(org.bukkit.ChatColor.DARK_GRAY + "--------------------------------------------------");
@@ -246,7 +258,7 @@ public final class dakotaAC extends JavaPlugin {
         pm.registerEvents(new Scaffold(), this);
 
         // Notification System
-        pm.registerEvents(new violation(), this);
+        pm.registerEvents(new Violation(), this);
     }
 
     // ==========================================================

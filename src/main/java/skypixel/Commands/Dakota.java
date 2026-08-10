@@ -1,4 +1,4 @@
-package skypixel.Notification;
+package skypixel.Commands;
 
 import org.bukkit.ChatColor;
 import org.bukkit.command.Command;
@@ -6,20 +6,19 @@ import org.bukkit.command.CommandExecutor;
 import org.bukkit.command.CommandSender;
 import org.bukkit.command.TabCompleter;
 import skypixel.dakotaAC;
+import skypixel.Notification.flagPlayer;
 
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 
-public class command implements CommandExecutor, TabCompleter {
+public class Dakota implements CommandExecutor, TabCompleter {
 
     private final String PREFIX = ChatColor.translateAlternateColorCodes('&', "&8[&cDakotaAC&8] &7");
 
     @Override
     public boolean onCommand(CommandSender sender, Command cmd, String label, String[] args) {
-
-        // Verificăm permisiunea
         if (!sender.hasPermission("dakotaac.admin")) {
             sender.sendMessage(PREFIX + ChatColor.RED + "You do not have permission to use this command.");
             return true;
@@ -34,13 +33,11 @@ public class command implements CommandExecutor, TabCompleter {
 
         switch (subCommand) {
             case "reload":
-                // Apelăm metoda care citește config-ul actualizat
                 dakotaAC.getInstance().loadConfigSettings();
                 sender.sendMessage(PREFIX + ChatColor.GREEN + "Plugin configuration and modules successfully reloaded!");
                 break;
 
             case "notify":
-                // Folosim metoda care salvează în config
                 dakotaAC.toggleNotifications();
                 if (flagPlayer.alertsEnabled) {
                     sender.sendMessage(PREFIX + ChatColor.GREEN + "AntiCheat notifications are now ENABLED.");
@@ -50,7 +47,7 @@ public class command implements CommandExecutor, TabCompleter {
                 break;
 
             case "status":
-                org.bukkit.plugin.PluginDescriptionFile pdf = skypixel.dakotaAC.getInstance().getDescription();
+                org.bukkit.plugin.PluginDescriptionFile pdf = dakotaAC.getInstance().getDescription();
                 String version = pdf.getVersion();
                 String authors = String.join(", ", pdf.getAuthors());
 
@@ -128,7 +125,7 @@ public class command implements CommandExecutor, TabCompleter {
 
                 Map<String, Boolean> checks = dakotaAC.getChecks();
                 boolean currentState = checks.get(module);
-                checks.put(module, !currentState); // Inversăm starea
+                checks.put(module, !currentState);
 
                 if (!currentState) {
                     sender.sendMessage(PREFIX + "Module " + ChatColor.YELLOW + module + ChatColor.GRAY + " is now " + ChatColor.GREEN + "ENABLED");
@@ -141,7 +138,6 @@ public class command implements CommandExecutor, TabCompleter {
                 sender.sendMessage(PREFIX + ChatColor.RED + "Unknown command.");
                 break;
         }
-
         return true;
     }
 

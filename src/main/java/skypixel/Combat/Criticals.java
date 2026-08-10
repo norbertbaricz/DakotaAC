@@ -50,8 +50,7 @@ public class Criticals implements Listener {
                         PacketType.Play.Client.USE_ENTITY,
                         PacketType.Play.Client.POSITION,
                         PacketType.Play.Client.POSITION_LOOK,
-                        PacketType.Play.Client.LOOK,
-                        PacketType.Play.Client.FLYING) {
+                        PacketType.Play.Client.LOOK) { // <-- AICI AM ȘTERS PACKET-UL FLYING
 
                     @Override
                     public void onPacketReceiving(PacketEvent event) {
@@ -136,7 +135,7 @@ public class Criticals implements Listener {
                                 // 2. ACTUALIZAREA TRACKER-ULUI (Mișcare)
                                 // ==========================================
                             } else {
-                                // Toate pachetele de zbor (FLYING/POSITION/LOOK) conțin starea "onGround" pe poziția 0
+                                // Toate pachetele de zbor (POSITION/POSITION_LOOK/LOOK) conțin starea "onGround" pe poziția 0
                                 boolean onGround = event.getPacket().getBooleans().readSafely(0);
                                 onGroundMap.put(uuid, onGround);
 

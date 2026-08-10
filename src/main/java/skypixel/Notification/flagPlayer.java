@@ -23,7 +23,7 @@ public class flagPlayer {
         // --------------------------------------------------------
         // 1. SISTEMUL DE PEDEPSE (Se execută MEREU, de fiecare dată când e detectat un hack)
         // --------------------------------------------------------
-        skypixel.Notification.violation.addViolation(player, hackType, details);
+        Violation.addViolation(player, hackType, details);
 
         // --------------------------------------------------------
         // 2. SISTEMUL DE ALERTE ANTI-SPAM (Consolă + Chat)

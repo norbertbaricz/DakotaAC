@@ -11,7 +11,7 @@ import skypixel.dakotaAC;
 import java.util.HashMap;
 import java.util.UUID;
 
-public class violation implements Listener {
+public class Violation implements Listener {
 
     // Stocăm câte flag-uri a acumulat fiecare jucător
     private static final HashMap<UUID, Integer> totalFlags = new HashMap<>();

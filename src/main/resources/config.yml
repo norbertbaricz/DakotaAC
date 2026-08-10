@@ -24,10 +24,10 @@ Settings:
   Auto-Ban: false
 
   # How many violations (flags) a player must accumulate to trigger an automatic kick.
-  Max-Kick-Flags: 15
+  Max-Kick-Flags: 1500
 
   # How many violations (flags) a player must accumulate to trigger an automatic ban.
-  Max-Ban-Flags: 30
+  Max-Ban-Flags: 3000
 
 # ==========================================================
 # MODULES CONFIGURATION

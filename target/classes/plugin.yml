@@ -17,6 +17,9 @@ commands:
     aliases:
       - dac
       - anticheat
+  report:
+      description: Raporteaza un jucator suspect
+      usage: /report <jucator>
 
 permissions:
   dakotaac.command:

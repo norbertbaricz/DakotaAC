@@ -16,22 +16,18 @@ import org.bukkit.Bukkit;
 import org.bukkit.GameMode;
 import org.bukkit.Location;
 import org.bukkit.Material;
-import org.bukkit.entity.Entity;
 import org.bukkit.entity.EntityType;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
-import org.bukkit.event.entity.EntityDamageByEntityEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.util.Vector;
 import skypixel.Notification.flagPlayer;
 import skypixel.dakotaAC;
 
-import java.util.ArrayDeque;
 import java.util.Arrays;
 import java.util.Collections;
-import java.util.Deque;
 import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.Iterator;
@@ -50,10 +46,6 @@ public class AntiBot implements Listener {
     // --- Easy-to-tune thresholds ---
     // =========================================================
 
-    // Setari Start Test
-    private static final int REAL_HITS_TO_START_TEST = 8;
-    private static final long REAL_HIT_WINDOW_MS = 2_000L;
-
     // Setari Nivel 1 (Bot rotativ)
     private static final int LEVEL_ONE_HITS_TO_ADVANCE = 5;
     private static final long LEVEL_ONE_TIMEOUT_MS = 2_000L;
@@ -71,7 +63,6 @@ public class AntiBot implements Listener {
 
     private static final ProtocolManager PROTOCOL = ProtocolLibrary.getProtocolManager();
     private static final AtomicInteger NEXT_ENTITY_ID = new AtomicInteger(3_000_000);
-    private static final Map<UUID, Deque<Long>> recentRealHits = new HashMap<>();
     private static final Map<UUID, Session> sessions = new HashMap<>();
     private static final Map<Integer, UUID> botOwners = new HashMap<>();
     private static final Random RANDOM = new Random();
@@ -117,31 +108,24 @@ public class AntiBot implements Listener {
         Bukkit.getScheduler().runTaskTimer(dakotaAC.getInstance(), this::tickSessions, 1L, 1L);
     }
 
-    @EventHandler(ignoreCancelled = true)
-    public void onEntityDamage(EntityDamageByEntityEvent event) {
-        if (!dakotaAC.isCheckActive("AntiBot") || !(event.getDamager() instanceof Player player)) {
+    /**
+     * Aceasta este metoda principala care va fi apelata de comanda /report
+     * pentru a declansa fortat testul AntiBot pe un jucator.
+     */
+    public static void executeReportCheck(Player player) {
+        if (!dakotaAC.isCheckActive("AntiBot") || player == null || !player.isOnline()) {
             return;
         }
 
-        // Am scos "target instanceof Player" de aici ca sa functioneze pe orice tip de entitate (inclusiv jucatori)
+        // Daca jucatorul este deja in test sau are gamemode creativ, ignoram
         if (sessions.containsKey(player.getUniqueId()) || player.getGameMode() == GameMode.CREATIVE) {
             return;
         }
 
-        long now = System.currentTimeMillis();
-        Deque<Long> hits = recentRealHits.computeIfAbsent(player.getUniqueId(), ignored -> new ArrayDeque<>());
-        hits.addLast(now);
-        while (!hits.isEmpty() && now - hits.peekFirst() > REAL_HIT_WINDOW_MS) {
-            hits.removeFirst();
-        }
-
-        if (hits.size() >= REAL_HITS_TO_START_TEST) {
-            hits.clear();
-            startLevelOne(player);
-        }
+        startLevelOne(player);
     }
 
-    private void startLevelOne(Player player) {
+    private static void startLevelOne(Player player) {
         if (!player.isOnline() || sessions.containsKey(player.getUniqueId())) {
             return;
         }
@@ -155,7 +139,7 @@ public class AntiBot implements Listener {
         spawnBot(player, session.bot);
     }
 
-    private void startLevelTwo(Player player, Session session) {
+    private static void startLevelTwo(Player player, Session session) {
         removeBot(player, session.bot);
         session.level = Level.TWO;
         session.startedAt = System.currentTimeMillis();
@@ -164,7 +148,7 @@ public class AntiBot implements Listener {
         spawnBot(player, session.bot);
     }
 
-    private Location levelTwoLocation(Player player) {
+    private static Location levelTwoLocation(Player player) {
         Vector direction = player.getLocation().getDirection().setY(0).normalize();
         if (direction.lengthSquared() == 0.0D) {
             direction = new Vector(1, 0, 0);
@@ -174,7 +158,7 @@ public class AntiBot implements Listener {
                 .add(0, LEVEL_TWO_Y_OFFSET, 0);
     }
 
-    private void handleBotAttack(Player player, int entityId) {
+    private static void handleBotAttack(Player player, int entityId) {
         Session session = sessions.get(player.getUniqueId());
         if (session == null || session.bot == null || session.bot.entityId != entityId) {
             return;
@@ -236,7 +220,7 @@ public class AntiBot implements Listener {
     }
 
     // --- Logica prin care botul pune ochii pe jucator ---
-    private void facePlayer(VirtualBot bot, Player player) {
+    private static void facePlayer(VirtualBot bot, Player player) {
         Vector direction = player.getEyeLocation().toVector().subtract(bot.location.toVector());
         if (direction.lengthSquared() > 0.0D) {
             bot.location.setDirection(direction);
@@ -252,14 +236,14 @@ public class AntiBot implements Listener {
         }
     }
 
-    private void endSession(Player player) {
+    private static void endSession(Player player) {
         Session session = sessions.remove(player.getUniqueId());
         if (session != null) {
             removeBot(player, session.bot);
         }
     }
 
-    private void spawnBot(Player player, VirtualBot bot) {
+    private static void spawnBot(Player player, VirtualBot bot) {
         try {
             botOwners.put(bot.entityId, player.getUniqueId());
             PROTOCOL.sendServerPacket(player, playerInfoAdd(bot));
@@ -376,7 +360,6 @@ public class AntiBot implements Listener {
 
     @EventHandler
     public void onPlayerQuit(PlayerQuitEvent event) {
-        recentRealHits.remove(event.getPlayer().getUniqueId());
         endSession(event.getPlayer());
     }
 
@@ -385,7 +368,6 @@ public class AntiBot implements Listener {
             removeBot(Bukkit.getPlayer(entry.getKey()), entry.getValue().bot);
         }
         sessions.clear();
-        recentRealHits.clear();
         botOwners.clear();
     }
 
