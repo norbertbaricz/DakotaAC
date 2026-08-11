@@ -10,9 +10,11 @@ import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
+import org.bukkit.event.entity.PlayerDeathEvent;
 import org.bukkit.event.player.PlayerChangedWorldEvent;
 import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
+import org.bukkit.event.player.PlayerRespawnEvent;
 import org.bukkit.event.player.PlayerTeleportEvent;
 import skypixel.Notification.flagPlayer;
 import skypixel.dakotaAC;
@@ -22,7 +24,6 @@ import java.util.concurrent.ConcurrentHashMap;
 
 public class AntiVoid implements Listener {
 
-    // Stocăm datele asincron pentru performanță maximă pe thread-ul de rețea
     private final ConcurrentHashMap<UUID, double[]> lastPosMap = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<UUID, Double> minHeightMap = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<UUID, Long> lastTeleportTime = new ConcurrentHashMap<>();
@@ -43,7 +44,6 @@ public class AntiVoid implements Listener {
                             if (player == null) return;
                             UUID uuid = player.getUniqueId();
 
-                            // Extragem coordonatele și starea onGround direct din pachet
                             double toX = event.getPacket().getDoubles().readSafely(0);
                             double toY = event.getPacket().getDoubles().readSafely(1);
                             double toZ = event.getPacket().getDoubles().readSafely(2);
@@ -59,7 +59,6 @@ public class AntiVoid implements Listener {
                             double fromY = fromPos[1];
                             double deltaY = toY - fromY;
 
-                            // Preluăm limita asincronă a lumii (ex: 0 pentru 1.17, -64 pentru 1.18+)
                             double minHeight = minHeightMap.getOrDefault(uuid, -64.0);
 
                             boolean isVoidSpoof = false;
@@ -75,25 +74,18 @@ public class AntiVoid implements Listener {
                             // --------------------------------------------------------
                             // LOGICA 2: The Rubberband (Blink din Void)
                             // --------------------------------------------------------
-                            // Dacă sare din void mai mult de 5 blocuri și nu a primit recent un /tp de la admini
                             if (fromY < minHeight && deltaY > 5.0) {
                                 long timeSinceTeleport = System.currentTimeMillis() - lastTeleportTime.getOrDefault(uuid, 0L);
+                                // Dacă au trecut mai mult de 1000ms de la ultimul TP/Respawn
                                 if (timeSinceTeleport > 1000) {
                                     isVoidBlink = true;
                                 }
                             }
 
-                            // Dacă prindem hackerul, acționăm direct din zbor
                             if (isVoidSpoof || isVoidBlink) {
-
-                                // 1. Anulăm pachetul pe loc!
-                                // În loc să îl teleportăm înapoi, serverul îi va refuza mișcarea în sus
-                                // sau starea de onGround, lăsându-l să cadă spre moarte.
                                 event.setCancelled(true);
-
                                 final boolean spoof = isVoidSpoof;
 
-                                // 2. Trimitem flag-ul către Main Thread
                                 Bukkit.getScheduler().runTask(dakotaAC.getPlugin(dakotaAC.class), () -> {
                                     if (!player.isOnline()) return;
 
@@ -141,19 +133,36 @@ public class AntiVoid implements Listener {
         Location to = event.getTo();
 
         if (to != null) {
-            // Sincronizăm locația și oferim 1 secundă de imunitate la AntiVoid Blink
-            // pentru a preveni alertele false când un admin salvează un jucător cu /tp
             lastPosMap.put(uuid, new double[]{to.getX(), to.getY(), to.getZ()});
             lastTeleportTime.put(uuid, System.currentTimeMillis());
-
-            // Actualizăm și în caz că teleportul schimbă lumea
             minHeightMap.put(uuid, (double) to.getWorld().getMinHeight());
         }
     }
 
+    // ---> EVENIMENTE NOI ADAUGATE AICI <---
+
+    @EventHandler(priority = EventPriority.MONITOR)
+    public void onPlayerDeath(PlayerDeathEvent event) {
+        UUID uuid = event.getEntity().getUniqueId();
+        // Resetăm timer-ul ca să îi oferim imunitate cât timp este pe ecranul de moarte
+        lastTeleportTime.put(uuid, System.currentTimeMillis());
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR)
+    public void onPlayerRespawn(PlayerRespawnEvent event) {
+        UUID uuid = event.getPlayer().getUniqueId();
+        Location to = event.getRespawnLocation();
+
+        // Când dă click pe Respawn, actualizăm direct poziția de start pentru viitorul pachet
+        lastPosMap.put(uuid, new double[]{to.getX(), to.getY(), to.getZ()});
+        // Resetăm timer-ul pentru a reînnoi acea secundă de imunitate (1000ms)
+        lastTeleportTime.put(uuid, System.currentTimeMillis());
+        // Actualizăm limita lumii în caz că patul de respawn este în altă dimensiune
+        minHeightMap.put(uuid, (double) to.getWorld().getMinHeight());
+    }
+
     @EventHandler
     public void onPlayerQuit(PlayerQuitEvent event) {
-        // Prevenim memory leaks
         UUID uuid = event.getPlayer().getUniqueId();
         lastPosMap.remove(uuid);
         minHeightMap.remove(uuid);

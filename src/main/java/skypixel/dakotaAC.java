@@ -150,6 +150,7 @@ public final class dakotaAC extends JavaPlugin {
         loadModuleState("PingSpoof");
         loadModuleState("ServerCrasher");
         loadModuleState("Teleport");
+        loadModuleState("Regen");
 
         // Fun & Misc
         loadModuleState("Derp");
@@ -173,6 +174,8 @@ public final class dakotaAC extends JavaPlugin {
         loadModuleState("ChestStealer");
         loadModuleState("FastUse");
         loadModuleState("InventoryCleaner");
+        loadModuleState("Version");
+        loadModuleState("AntiVPN");
 
         // Render
         loadModuleState("ESP");
@@ -221,6 +224,7 @@ public final class dakotaAC extends JavaPlugin {
         pm.registerEvents(new PingSpoof(), this);
         pm.registerEvents(new ServerCrasher(), this);
         pm.registerEvents(new Teleport(), this);
+        pm.registerEvents(new Regen(), this);
 
         // Fun & Misc
         pm.registerEvents(new Derp(), this);
@@ -244,6 +248,8 @@ public final class dakotaAC extends JavaPlugin {
         pm.registerEvents(new ChestStealer(), this);
         pm.registerEvents(new FastUse(), this);
         pm.registerEvents(new InventoryCleaner(), this);
+        pm.registerEvents(new Version(), this);
+        pm.registerEvents(new AntiVPN(), this);
 
         // Render
         pm.registerEvents(new ESP(), this);
