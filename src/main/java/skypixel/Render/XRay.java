@@ -59,9 +59,9 @@ public class XRay implements Listener {
     };
 
     private static final int MAX_ACTIVE_DECOYS_PER_PLAYER = 20;
-    private static final int DECOYS_PLANTED_PER_CYCLE = 2;
-    private static final int SCAN_RADIUS_HORIZONTAL = 6;
-    private static final int SCAN_RADIUS_VERTICAL = 4;
+    private static final int DECOYS_PLANTED_PER_CYCLE = 10;
+    private static final int SCAN_RADIUS_HORIZONTAL = 8;
+    private static final int SCAN_RADIUS_VERTICAL = 6;
 
     public XRay() {
         // Detectăm momentul în care clientul începe să spargă un bloc — dacă e exact locația

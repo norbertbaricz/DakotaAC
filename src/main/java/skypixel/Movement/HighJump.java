@@ -27,8 +27,6 @@ public class HighJump implements Listener {
     private final ConcurrentHashMap<UUID, Long> bounceCooldowns = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<UUID, double[]> lastPosMap = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<UUID, Location> lastSafeLocation = new ConcurrentHashMap<>();
-
-    // Hartă nouă pentru imunitatea la teleport/moarte/respawn
     private final ConcurrentHashMap<UUID, Long> teleportImmunity = new ConcurrentHashMap<>();
 
     public HighJump() {
@@ -53,7 +51,6 @@ public class HighJump implements Listener {
 
                             double[] fromPos = lastPosMap.get(uuid);
 
-                            // Înregistrăm prima locație și ieșim
                             if (fromPos == null) {
                                 lastPosMap.put(uuid, new double[]{toX, toY, toZ});
                                 return;
@@ -61,24 +58,21 @@ public class HighJump implements Listener {
 
                             // 1. Verificare Imunitate (Grace Period)
                             if (teleportImmunity.containsKey(uuid) && teleportImmunity.get(uuid) > System.currentTimeMillis()) {
-                                // Sincronizăm locația silențios ca să evităm flag-uri la expirarea imunității
                                 lastPosMap.put(uuid, new double[]{toX, toY, toZ});
                                 return;
                             }
 
                             double deltaY = toY - fromPos[1];
 
-                            // Actualizăm poziția asincronă pentru viitorul pachet
                             lastPosMap.put(uuid, new double[]{toX, toY, toZ});
 
-                            // 2. Optimizare extremă pe thread-ul de rețea
+                            // 2. Optimizare extremă pe thread-ul de rețea (ignoram căderile și step-urile perfecte pe slab)
                             if (deltaY <= 0.0 || deltaY == 0.5) {
                                 return;
                             }
 
                             // 3. Delegăm verificările fizice către Main Thread
                             Bukkit.getScheduler().runTask(dakotaAC.getPlugin(dakotaAC.class), () -> {
-                                // Ne asigurăm din nou că jucătorul este valid
                                 if (!player.isOnline() || player.isDead()) return;
 
                                 Location toLoc = new Location(player.getWorld(), toX, toY, toZ, player.getLocation().getYaw(), player.getLocation().getPitch());
@@ -101,7 +95,6 @@ public class HighJump implements Listener {
                                     bounceCooldowns.put(uuid, System.currentTimeMillis() + 2000L);
                                 }
 
-                                // E în perioada de imunitate a blocurilor?
                                 if (bounceCooldowns.containsKey(uuid) && bounceCooldowns.get(uuid) > System.currentTimeMillis()) {
                                     lastSafeLocation.put(uuid, toLoc);
                                     return;
@@ -112,14 +105,20 @@ public class HighJump implements Listener {
                                     return;
                                 }
 
-                                // Calculăm viteza maximă permisă
+                                // Calculăm viteza maximă permisă (Vanilla Jump)
                                 double maxJumpVelocity = 0.425;
                                 if (player.hasPotionEffect(PotionEffectType.JUMP_BOOST)) {
                                     int level = player.getPotionEffect(PotionEffectType.JUMP_BOOST).getAmplifier() + 1;
                                     maxJumpVelocity += (level * 0.15);
                                 }
 
-                                // Plasă de siguranță server-side
+                                // NOU: Verificăm dacă e lângă un bloc complex (Covor, Gard, etc.)
+                                // Dacă este, îi dăm o marjă de eroare pentru "Step-Up" în același tick cu săritura.
+                                if (isNearComplexBlock(fromLoc) || isNearComplexBlock(toLoc)) {
+                                    maxJumpVelocity += 0.6; // Acoperă un salt normal + urcarea unui slab/covor simultan
+                                }
+
+                                // Plasă de siguranță server-side (bypass dacă serverul îl împinge)
                                 if (player.getVelocity().getY() > maxJumpVelocity) {
                                     lastSafeLocation.put(uuid, toLoc);
                                     return;
@@ -130,7 +129,6 @@ public class HighJump implements Listener {
                                     flagPlayer.addFlag(player, "HighJump", "Impossible jump velocity (Y-Speed: " + String.format("%.3f", deltaY) + ")");
 
                                     Location safe = lastSafeLocation.getOrDefault(uuid, player.getLocation());
-                                    // Adăugăm imunitate când îi dăm noi teleport ca să nu dea trigger la alt flag
                                     teleportImmunity.put(uuid, System.currentTimeMillis() + 1000L);
                                     player.teleport(safe, PlayerTeleportEvent.TeleportCause.PLUGIN);
                                 } else {
@@ -146,8 +144,6 @@ public class HighJump implements Listener {
         );
     }
 
-    // === EVENIMENTE NOI ȘI ACTUALIZATE PENTRU PREVENIREA ALERTELOR FALSE ===
-
     @EventHandler(priority = EventPriority.MONITOR)
     public void onPlayerTeleport(PlayerTeleportEvent event) {
         if (event.isCancelled()) return;
@@ -157,14 +153,13 @@ public class HighJump implements Listener {
         if (to != null) {
             lastSafeLocation.put(uuid, to);
             lastPosMap.put(uuid, new double[]{to.getX(), to.getY(), to.getZ()});
-            teleportImmunity.put(uuid, System.currentTimeMillis() + 1000L); // 1 secundă de imunitate
+            teleportImmunity.put(uuid, System.currentTimeMillis() + 1000L);
         }
     }
 
     @EventHandler(priority = EventPriority.MONITOR)
     public void onPlayerDeath(PlayerDeathEvent event) {
         UUID uuid = event.getEntity().getUniqueId();
-        // Când moare, îi dăm o imunitate lungă pentru a bloca pachetele haotice de pe ecranul de death
         teleportImmunity.put(uuid, System.currentTimeMillis() + 3000L);
     }
 
@@ -175,7 +170,7 @@ public class HighJump implements Listener {
 
         lastSafeLocation.put(uuid, to);
         lastPosMap.put(uuid, new double[]{to.getX(), to.getY(), to.getZ()});
-        teleportImmunity.put(uuid, System.currentTimeMillis() + 1500L); // 1.5 secunde după ce s-a respawnat efectiv
+        teleportImmunity.put(uuid, System.currentTimeMillis() + 1500L);
     }
 
     @EventHandler
@@ -209,5 +204,44 @@ public class HighJump implements Listener {
     private boolean isInBubbleColumn(Location loc) {
         Material blockAt = loc.getBlock().getType();
         return blockAt.name().contains("BUBBLE_COLUMN");
+    }
+
+    /**
+     * NOU: Scanează blocurile complexe (cu Hitbox neregulat) pe care jucătorul
+     * s-ar putea urca (Step) în același timp în care sare.
+     */
+    private boolean isNearComplexBlock(Location loc) {
+        int minX = (int) Math.floor(loc.getX() - 0.3);
+        int maxX = (int) Math.floor(loc.getX() + 0.3);
+        int minY = (int) Math.floor(loc.getY() - 0.5); // Căutăm puțin și sub picioare
+        int maxY = (int) Math.floor(loc.getY() + 1.5); // Acoperă înălțimea gardurilor (1.5)
+
+        // Aceste două rânduri lipseau:
+        int minZ = (int) Math.floor(loc.getZ() - 0.3);
+        int maxZ = (int) Math.floor(loc.getZ() + 0.3);
+
+        for (int bx = minX; bx <= maxX; bx++) {
+            for (int by = minY; by <= maxY; by++) {
+                for (int bz = minZ; bz <= maxZ; bz++) {
+                    Material type = loc.getWorld().getBlockAt(bx, by, bz).getType();
+                    if (type.isAir()) continue;
+
+                    String name = type.name();
+                    if (name.contains("FENCE") ||
+                            name.contains("CARPET") ||
+                            name.contains("SNOW") ||
+                            name.contains("SLAB") ||
+                            name.contains("STEP") ||
+                            name.contains("STAIRS") ||
+                            name.contains("WALL") ||
+                            name.contains("TRAPDOOR") ||
+                            name.contains("BED") ||
+                            name.contains("LILY")) {
+                        return true;
+                    }
+                }
+            }
+        }
+        return false;
     }
 }

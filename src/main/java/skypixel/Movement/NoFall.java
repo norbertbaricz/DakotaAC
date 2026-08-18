@@ -5,15 +5,18 @@ import com.comphenix.protocol.ProtocolLibrary;
 import com.comphenix.protocol.events.PacketAdapter;
 import com.comphenix.protocol.events.PacketEvent;
 import org.bukkit.Bukkit;
+import org.bukkit.GameMode;
 import org.bukkit.Location;
 import org.bukkit.Material;
-import org.bukkit.block.Block;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
+import org.bukkit.event.entity.PlayerDeathEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
+import org.bukkit.event.player.PlayerRespawnEvent;
 import org.bukkit.event.player.PlayerTeleportEvent;
+import org.bukkit.potion.PotionEffectType;
 import skypixel.Notification.flagPlayer;
 import skypixel.dakotaAC;
 
@@ -22,11 +25,26 @@ import java.util.concurrent.ConcurrentHashMap;
 
 public class NoFall implements Listener {
 
-    // Stocăm coordonatele asincron pentru citire stabilă pe ProtocolLib
+    // ==========================================
+    // SETĂRI UȘOR DE REGLAT (EASY TO TUNE)
+    // Modifică aceste valori direct din cod fără să strici logica principală.
+    // ==========================================
+    private static final double MIN_FALL_DIST_TO_CHECK = 2.5; // De la ce distanță de cădere începem să flag-uim jucătorul
+    private static final double DESYNC_TOLERANCE_NORMAL = 1.5; // Diferența maximă permisă client vs server pentru jucători standard
+    private static final double DESYNC_TOLERANCE_JUMP_BOOST = 4.0; // Toleranță mărită pentru Jump Boost (serverul calculează fall distance diferit cu acest efect)
+    private static final double UPWARD_VELOCITY_RESET_NORMAL = 0.4; // O săritură normală generează deltaY ~0.42
+    private static final double UPWARD_VELOCITY_RESET_JUMP_BOOST = 0.2; // Pentru Jump Boost, suntem mai permisivi pe urcare
+
+    private static final long TELEPORT_IMMUNITY_MS = 1500L;
+    private static final long RESPAWN_IMMUNITY_MS = 2000L;
+    private static final long DEATH_IMMUNITY_MS = 3000L;
+    // ==========================================
+
     private final ConcurrentHashMap<UUID, double[]> lastPosMap = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<UUID, Double> realFallDistanceMap = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<UUID, Long> teleportImmunity = new ConcurrentHashMap<>();
 
     public NoFall() {
-        // Interceptăm coordonatele la secunda în care sunt trimise de jucător
         ProtocolLibrary.getProtocolManager().addPacketListener(
                 new PacketAdapter(dakotaAC.getPlugin(dakotaAC.class),
                         com.comphenix.protocol.events.ListenerPriority.NORMAL,
@@ -39,16 +57,13 @@ public class NoFall implements Listener {
                             if (!dakotaAC.isCheckActive("NoFall")) return;
 
                             Player player = event.getPlayer();
-                            if (player == null) return;
+                            if (player == null || !player.isOnline()) return;
                             UUID uuid = player.getUniqueId();
 
-                            // Extragem coordonatele noi
                             double toX = event.getPacket().getDoubles().readSafely(0);
                             double toY = event.getPacket().getDoubles().readSafely(1);
                             double toZ = event.getPacket().getDoubles().readSafely(2);
-
-                            // EXTRAGEREA CHEIE: Variabila onGround trimisă de client
-                            boolean onGround = event.getPacket().getBooleans().readSafely(0);
+                            boolean clientOnGround = event.getPacket().getBooleans().readSafely(0);
 
                             double[] fromPos = lastPosMap.get(uuid);
 
@@ -57,51 +72,95 @@ public class NoFall implements Listener {
                                 return;
                             }
 
-                            double deltaY = toY - fromPos[1];
-
-                            // Actualizăm memoria pentru următorul pachet
-                            lastPosMap.put(uuid, new double[]{toX, toY, toZ});
-
-                            // 1. Optimizare extremă pe thread-ul de rețea:
-                            // Dacă jucătorul urcă (deltaY >= 0) sau raportează corect că este în aer (onGround == false),
-                            // pachetul este complet curat. Oprim procesarea aici!
-                            if (deltaY >= 0.0 || !onGround) {
+                            // 1. Verificare Imunitate (Teleport / Moarte / Respawn)
+                            if (teleportImmunity.containsKey(uuid) && teleportImmunity.get(uuid) > System.currentTimeMillis()) {
+                                lastPosMap.put(uuid, new double[]{toX, toY, toZ});
+                                realFallDistanceMap.put(uuid, 0.0);
                                 return;
                             }
 
-                            // Avem un pachet care spune "onGround = true", deși jucătorul este în cădere liberă (deltaY < 0).
-                            // Delegăm verificările fizice către Main Thread.
+                            double deltaY = toY - fromPos[1];
+                            lastPosMap.put(uuid, new double[]{toX, toY, toZ});
+
                             Bukkit.getScheduler().runTask(dakotaAC.getPlugin(dakotaAC.class), () -> {
                                 if (!player.isOnline() || player.isDead()) return;
 
+                                // 2. Ignorăm modurile de joc și zborul legitim
+                                if (player.getGameMode() == GameMode.CREATIVE || player.getGameMode() == GameMode.SPECTATOR ||
+                                        player.getAllowFlight() || player.isGliding() || player.isInsideVehicle() || player.isSwimming()) {
+                                    realFallDistanceMap.put(uuid, 0.0);
+                                    return;
+                                }
+
+                                // 3. VERIFICĂRI SUPREME PENTRU EFECTE VANILLA / NBT
+                                // Jucătorii cu aceste mecanici nu respectă legile gravitației standard.
+                                if (player.hasPotionEffect(PotionEffectType.SLOW_FALLING) ||
+                                        player.hasPotionEffect(PotionEffectType.LEVITATION)) {
+                                    realFallDistanceMap.put(uuid, 0.0);
+                                    return;
+                                }
+
                                 Location toLoc = new Location(player.getWorld(), toX, toY, toZ);
+                                boolean isPhysicallyOnGround = isNearGround(toLoc);
 
-                                // 2. Excepții Vanilla (Zbor, Elytra, Vehicule)
-                                if (player.getAllowFlight() || player.isGliding() || player.isInsideVehicle() || player.isSwimming()) {
+                                // Dacă cade în ceva moale, serverul iartă fall damage-ul, deci îl iertăm și noi.
+                                if (isSafeLandingBlock(toLoc)) {
+                                    realFallDistanceMap.put(uuid, 0.0);
                                     return;
                                 }
 
-                                // 3. Verificarea mediului (Apă, Lavă, Pânze)
-                                Material currentBlock = player.getLocation().getBlock().getType();
-                                if (currentBlock == Material.WATER || currentBlock == Material.LAVA ||
-                                        currentBlock == Material.COBWEB || currentBlock == Material.LADDER ||
-                                        currentBlock == Material.VINE) {
-                                    return;
-                                }
+                                double realFallDist = realFallDistanceMap.getOrDefault(uuid, 0.0);
+                                boolean hasJumpBoost = player.hasPotionEffect(PotionEffectType.JUMP_BOOST);
 
-                                // 4. Nucleul Logicii NoFall
-                                // Un jucător legitim care aterizează pe un bloc va avea deltaY negativ și onGround=true.
-                                // Verificăm fizic dacă există un bloc real care să justifice acest onGround.
-                                if (deltaY < -0.1) {
-                                    if (!hasSolidBlockNear(toLoc)) {
+                                // 4. Matematica căderii
+                                if (deltaY < 0.0) {
+                                    realFallDist += Math.abs(deltaY);
+                                } else if (deltaY > 0.0 && !isPhysicallyOnGround) {
+                                    // Setăm un prag de resetare dinamic bazat pe Jump Boost
+                                    double resetThreshold = hasJumpBoost ? UPWARD_VELOCITY_RESET_JUMP_BOOST : UPWARD_VELOCITY_RESET_NORMAL;
 
-                                        flagPlayer.addFlag(player, "NoFall", "Spoofed ground status mid-air (dY: " + String.format("%.4f", deltaY) + ")");
-
-                                        // Pedeapsă: Putem forța un anumit damage pentru a anula beneficiul hack-ului
-                                        // double fallDamage = (Math.abs(deltaY) * 10.0);
-                                        // player.damage(fallDamage);
+                                    if (deltaY > resetThreshold) {
+                                        realFallDist = 0.0;
                                     }
                                 }
+
+                                // === 5. LOGICA SUPREMĂ DE DETECȚIE ===
+
+                                if (!isPhysicallyOnGround) {
+                                    // SUNTEM ÎN AER.
+                                    if (realFallDist > MIN_FALL_DIST_TO_CHECK) {
+
+                                        // Folosim o toleranță mai mare dacă jucătorul are efect NBT care decalează fizica
+                                        double currentTolerance = hasJumpBoost ? DESYNC_TOLERANCE_JUMP_BOOST : DESYNC_TOLERANCE_NORMAL;
+
+                                        // Modul "Packet" / "Hypixel"
+                                        if (player.getFallDistance() < (realFallDist - currentTolerance)) {
+                                            flagPlayer.addFlag(player, "NoFall (Packet)", "Server distance reset mid-air (RealFall: " + String.format("%.2f", realFallDist) + " | Server: " + String.format("%.2f", player.getFallDistance()) + ")");
+                                            player.setFallDistance((float) realFallDist);
+                                        }
+
+                                        // Modul "SpoofGround" / "Vulcan"
+                                        if (clientOnGround) {
+                                            flagPlayer.addFlag(player, "NoFall (Spoof)", "Spoofed onGround mid-air (RealFall: " + String.format("%.2f", realFallDist) + ")");
+                                            player.setFallDistance((float) realFallDist);
+                                        }
+                                    }
+                                } else {
+                                    // AM ATERIZAT PE PĂMÂNT.
+                                    if (realFallDist >= 3.0) {
+
+                                        // Modul "NoGround" / "BlocksMC"
+                                        if (!clientOnGround) {
+                                            flagPlayer.addFlag(player, "NoFall (NoGround)", "Landed but denied onGround (RealFall: " + String.format("%.2f", realFallDist) + ")");
+                                            forceFallDamage(player, realFallDist);
+                                        }
+                                    }
+
+                                    // A atins pământul, resetăm distanța pentru viitor.
+                                    realFallDist = 0.0;
+                                }
+
+                                realFallDistanceMap.put(uuid, realFallDist);
                             });
 
                         } catch (Exception ex) {
@@ -112,9 +171,14 @@ public class NoFall implements Listener {
         );
     }
 
-    /**
-     * Sincronizăm teleportările serverului pentru a preveni alertele false (False Positives).
-     */
+    private void forceFallDamage(Player player, double realFallDist) {
+        double damage = realFallDist - 3.0;
+        if (damage > 0) {
+            teleportImmunity.put(player.getUniqueId(), System.currentTimeMillis() + 500L);
+            player.damage(damage);
+        }
+    }
+
     @EventHandler(priority = EventPriority.MONITOR)
     public void onPlayerTeleport(PlayerTeleportEvent event) {
         if (event.isCancelled()) return;
@@ -123,37 +187,86 @@ public class NoFall implements Listener {
 
         if (to != null) {
             lastPosMap.put(uuid, new double[]{to.getX(), to.getY(), to.getZ()});
+            realFallDistanceMap.put(uuid, 0.0);
+            teleportImmunity.put(uuid, System.currentTimeMillis() + TELEPORT_IMMUNITY_MS);
         }
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR)
+    public void onPlayerDeath(PlayerDeathEvent event) {
+        UUID uuid = event.getEntity().getUniqueId();
+        realFallDistanceMap.put(uuid, 0.0);
+        teleportImmunity.put(uuid, System.currentTimeMillis() + DEATH_IMMUNITY_MS);
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR)
+    public void onPlayerRespawn(PlayerRespawnEvent event) {
+        UUID uuid = event.getPlayer().getUniqueId();
+        Location to = event.getRespawnLocation();
+
+        lastPosMap.put(uuid, new double[]{to.getX(), to.getY(), to.getZ()});
+        realFallDistanceMap.put(uuid, 0.0);
+        teleportImmunity.put(uuid, System.currentTimeMillis() + RESPAWN_IMMUNITY_MS);
     }
 
     @EventHandler
     public void onPlayerQuit(PlayerQuitEvent event) {
-        // Prevenim scurgerile de memorie
-        lastPosMap.remove(event.getPlayer().getUniqueId());
+        UUID uuid = event.getPlayer().getUniqueId();
+        lastPosMap.remove(uuid);
+        realFallDistanceMap.remove(uuid);
+        teleportImmunity.remove(uuid);
     }
 
-    /**
-     * Scanare volumetrică optimizată pentru a preveni flag-urile false când
-     * jucătorul alunecă de pe marginea unui slab sau a unei scări.
-     */
-    private boolean hasSolidBlockNear(Location loc) {
-        Block blockDirectlyBelow = loc.clone().subtract(0, 0.1, 0).getBlock();
-        if (blockDirectlyBelow.getType().isSolid() || blockDirectlyBelow.isLiquid()) {
-            return true;
-        }
+    private boolean isNearGround(Location loc) {
+        int minX = (int) Math.floor(loc.getX() - 0.3);
+        int maxX = (int) Math.floor(loc.getX() + 0.3);
+        int minY = (int) Math.floor(loc.getY() - 0.5);
+        int maxY = (int) Math.floor(loc.getY() + 0.5);
+        int minZ = (int) Math.floor(loc.getZ() - 0.3);
+        int maxZ = (int) Math.floor(loc.getZ() + 0.3);
 
-        double expand = 0.3;
-        for (double x = -expand; x <= expand; x += expand) {
-            for (double z = -expand; z <= expand; z += expand) {
-                for (double y = 0.1; y <= 1.5; y += 0.5) {
-                    Block block = loc.clone().add(x, -y, z).getBlock();
-                    if (block.getType().isSolid() || block.isLiquid()) {
+        for (int bx = minX; bx <= maxX; bx++) {
+            for (int by = minY; by <= maxY; by++) {
+                for (int bz = minZ; bz <= maxZ; bz++) {
+                    Material type = loc.getWorld().getBlockAt(bx, by, bz).getType();
+                    if (type.isAir()) continue;
+
+                    if (type.isSolid() || type.name().contains("SNOW") || type.name().contains("CARPET") || type.name().contains("LILY")) {
                         return true;
                     }
                 }
             }
         }
+        return false;
+    }
 
+    private boolean isSafeLandingBlock(Location loc) {
+        int minX = (int) Math.floor(loc.getX() - 0.3);
+        int maxX = (int) Math.floor(loc.getX() + 0.3);
+        int minY = (int) Math.floor(loc.getY() - 0.5);
+        int maxY = (int) Math.floor(loc.getY() + 1.5);
+        int minZ = (int) Math.floor(loc.getZ() - 0.3);
+        int maxZ = (int) Math.floor(loc.getZ() + 0.3);
+
+        for (int bx = minX; bx <= maxX; bx++) {
+            for (int by = minY; by <= maxY; by++) {
+                for (int bz = minZ; bz <= maxZ; bz++) {
+                    Material type = loc.getWorld().getBlockAt(bx, by, bz).getType();
+                    String name = type.name();
+
+                    // Am adăugat blocuri noi introduse în versiunile recente (Powder Snow, Kelp, Weeping/Twisting vines)
+                    if (name.contains("WATER") || name.contains("LAVA") ||
+                            name.contains("COBWEB") || name.contains("SLIME") ||
+                            name.contains("HONEY") || name.contains("BED") ||
+                            name.contains("LADDER") || name.contains("VINE") ||
+                            name.contains("SCAFFOLDING") || name.contains("BERRY_BUSH") ||
+                            name.contains("POWDER_SNOW") || name.contains("KELP") ||
+                            name.contains("TWISTING_VINES") || name.contains("WEEPING_VINES")) {
+                        return true;
+                    }
+                }
+            }
+        }
         return false;
     }
 }

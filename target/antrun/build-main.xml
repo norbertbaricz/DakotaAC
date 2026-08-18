@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project name="maven-antrun-" default="main">
+  <target name="main">
+    <echo message="Se trimite pluginul DakotaAC pe VPS..." />
+    <exec failonerror="true" executable="scp">
+      <arg value="target/DakotaAC-0.17.jar" />
+      <arg value="root@100.120.106.101:/home/raul/Development/plugins/" />
+    </exec>
+  </target>
+</project>

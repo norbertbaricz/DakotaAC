@@ -23,13 +23,27 @@ import java.util.concurrent.ConcurrentHashMap;
 
 public class Fly implements Listener {
 
-    // Stocăm datele asincron pentru citire stabilă pe ProtocolLib
-    private final ConcurrentHashMap<UUID, Integer> airTicks = new ConcurrentHashMap<>();
+    // ==========================================
+    // SETĂRI UȘOR DE REGLAT (EASY TO TUNE)
+    // ==========================================
+    // Cât permitem unui jucător să plutească pe loc în aer (deltaY = 0)? Foarte restrictiv!
+    private final int MAX_HOVER_TICKS = 3;
+
+    // Cât permitem să urce continuu (deltaY > 0) dintr-o săritură normală?
+    private final int MAX_ASCENSION_TICKS = 12;
+
+    // Câte milisecunde permitem ascensiune liberă (sărituri masive) după ce atinge un Slime / Pat?
+    private final long BOUNCE_IMMUNITY_MS = 2500L;
+    // ==========================================
+
+    private final ConcurrentHashMap<UUID, Integer> hoverTicksMap = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<UUID, Integer> ascendTicksMap = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<UUID, Long> bounceImmunity = new ConcurrentHashMap<>();
+
     private final ConcurrentHashMap<UUID, Location> lastSafeLocation = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<UUID, double[]> lastPosMap = new ConcurrentHashMap<>();
 
     public Fly() {
-        // Interceptăm coordonatele la secunda în care sunt trimise de mouse-ul/tastatura jucătorului
         ProtocolLibrary.getProtocolManager().addPacketListener(
                 new PacketAdapter(dakotaAC.getPlugin(dakotaAC.class),
                         com.comphenix.protocol.events.ListenerPriority.NORMAL,
@@ -42,10 +56,9 @@ public class Fly implements Listener {
                             if (!dakotaAC.isCheckActive("Fly")) return;
 
                             Player player = event.getPlayer();
-                            if (player == null) return;
+                            if (player == null || !player.isOnline()) return;
                             UUID uuid = player.getUniqueId();
 
-                            // Extragem locația nouă din pachet
                             double toX = event.getPacket().getDoubles().readSafely(0);
                             double toY = event.getPacket().getDoubles().readSafely(1);
                             double toZ = event.getPacket().getDoubles().readSafely(2);
@@ -61,67 +74,66 @@ public class Fly implements Listener {
                             double deltaY = toY - fromPos[1];
                             double deltaZ = toZ - fromPos[2];
 
-                            // 0. Extreme Optimization: Dacă doar a mișcat capul (Yaw/Pitch), ignorăm pachetul
+                            // 0. Dacă doar a mișcat capul, ignorăm (evităm falsificarea tick-urilor)
                             if (deltaX == 0.0 && deltaY == 0.0 && deltaZ == 0.0) {
                                 return;
                             }
 
-                            // Actualizăm memoria asincronă cu noua poziție
                             lastPosMap.put(uuid, new double[]{toX, toY, toZ});
 
-                            // --- TRIMITEM VERIFICAREA CĂTRE MAIN THREAD PENTRU A CITI BLOCURILE ---
+                            // --- VERIFICARE PE MAIN THREAD ---
                             Bukkit.getScheduler().runTask(dakotaAC.getPlugin(dakotaAC.class), () -> {
                                 if (!player.isOnline() || player.isDead()) return;
 
                                 Location toLoc = new Location(player.getWorld(), toX, toY, toZ, player.getLocation().getYaw(), player.getLocation().getPitch());
 
-                                // 1. Verificăm excepțiile legitime de zbor/mișcare
-                                if (player.getAllowFlight() || player.isGliding() || player.isInsideVehicle() || player.isSwimming()) {
+                                // 1. Excepții legitime
+                                if (player.getAllowFlight() || player.isGliding() || player.isInsideVehicle() || player.isSwimming() ||
+                                        player.hasPotionEffect(PotionEffectType.LEVITATION) || player.hasPotionEffect(PotionEffectType.JUMP_BOOST) ||
+                                        player.hasPotionEffect(PotionEffectType.SLOW_FALLING)) {
                                     resetTicksAndSafeLocation(uuid, toLoc);
                                     return;
                                 }
 
-                                if (player.hasPotionEffect(PotionEffectType.LEVITATION) || player.hasPotionEffect(PotionEffectType.JUMP_BOOST)) {
+                                // 2. Verificare Pământ + Bouncy Blocks (Slime / Bed)
+                                if (isNearGround(toLoc)) {
+                                    if (isBouncyBlock(toLoc)) {
+                                        bounceImmunity.put(uuid, System.currentTimeMillis() + BOUNCE_IMMUNITY_MS);
+                                    }
                                     resetTicksAndSafeLocation(uuid, toLoc);
                                     return;
                                 }
 
-                                Material currentBlock = player.getLocation().getBlock().getType();
-                                if (currentBlock == Material.WATER || currentBlock == Material.LAVA ||
-                                        currentBlock == Material.LADDER || currentBlock == Material.VINE) {
-                                    resetTicksAndSafeLocation(uuid, toLoc);
-                                    return;
-                                }
-
-                                // 2. Verificăm blocurile solide de sub și de lângă jucător
-                                if (hasSolidBlockNear(toLoc)) {
-                                    resetTicksAndSafeLocation(uuid, toLoc);
-                                    return;
-                                }
-
-                                // 3. Verificarea gravității naturale
+                                // 3. Gravitația Naturală (Cădere)
                                 if (deltaY < 0.0) {
-                                    // Jucătorul cade. Scădem airTicks sau le resetăm, dar nu dăm flag aici.
-                                    airTicks.put(uuid, 0);
+                                    hoverTicksMap.put(uuid, 0);
+                                    ascendTicksMap.put(uuid, 0);
                                     return;
                                 }
 
-                                // 4. Logica "Jump Buffer" (Fly Check)
-                                // Jucătorul este în aer, nu cade (deltaY >= 0) și nu are niciun bloc sub el.
-                                int currentAirTicks = airTicks.getOrDefault(uuid, 0) + 1;
-                                airTicks.put(uuid, currentAirTicks);
+                                // === 4. LOGICA SUPREMĂ FLY CHECK ===
 
-                                // Un salt normal (Jump) generează deltaY pozitiv timp de 5-6 tick-uri.
-                                // La 10 tick-uri (jumătate de secundă de urcat/plutit constant), e clar Fly hack.
-                                if (currentAirTicks > 10) {
-                                    String flyType = (deltaY == 0.0) ? "Hover/AirWalk" : "Ascension/Fly";
-                                    flagPlayer.addFlag(player, "Fly (" + flyType + ")", "In air for " + currentAirTicks + " ticks (dY: " + String.format("%.4f", deltaY) + ")");
+                                // HOVER FLY (Plutire: deltaY este 0.0 sau microscopic de mic)
+                                if (Math.abs(deltaY) < 0.001) {
+                                    int hoverTicks = hoverTicksMap.getOrDefault(uuid, 0) + 1;
+                                    hoverTicksMap.put(uuid, hoverTicks);
 
-                                    // Rubber-Band: Îl tragem înapoi la ultima locație pe care a atins-o legitim
-                                    Location safe = lastSafeLocation.getOrDefault(uuid, player.getLocation());
-                                    player.teleport(safe, PlayerTeleportEvent.TeleportCause.PLUGIN);
+                                    // Imunitatea de bounce NU te lasă să plutești! Te lasă doar să urci.
+                                    if (hoverTicks > MAX_HOVER_TICKS) {
+                                        flagAndRubberband(player, uuid, "Fly (Hover)", "Suspended in air for " + hoverTicks + " ticks", toLoc);
+                                    }
+                                }
+                                // ASCENSION FLY (Urcare: deltaY > 0)
+                                else if (deltaY > 0.0) {
+                                    int ascendTicks = ascendTicksMap.getOrDefault(uuid, 0) + 1;
+                                    ascendTicksMap.put(uuid, ascendTicks);
 
-                                    airTicks.put(uuid, 0);
+                                    // Verificăm dacă NU are imunitate de la un Slime Block / Pat
+                                    boolean hasBounceImmunity = bounceImmunity.containsKey(uuid) && bounceImmunity.get(uuid) > System.currentTimeMillis();
+
+                                    if (!hasBounceImmunity && ascendTicks > MAX_ASCENSION_TICKS) {
+                                        flagAndRubberband(player, uuid, "Fly (Ascension)", "Ascended for " + ascendTicks + " ticks (dY: " + String.format("%.4f", deltaY) + ")", toLoc);
+                                    }
                                 }
                             });
 
@@ -133,15 +145,23 @@ public class Fly implements Listener {
         );
     }
 
+    private void flagAndRubberband(Player player, UUID uuid, String hackType, String details, Location badLoc) {
+        flagPlayer.addFlag(player, hackType, details);
+
+        // Rubber-Band sigur la locația curată
+        Location safe = lastSafeLocation.getOrDefault(uuid, player.getLocation());
+        player.teleport(safe, PlayerTeleportEvent.TeleportCause.PLUGIN);
+
+        hoverTicksMap.put(uuid, 0);
+        ascendTicksMap.put(uuid, 0);
+    }
+
     private void resetTicksAndSafeLocation(UUID uuid, Location loc) {
-        airTicks.put(uuid, 0);
+        hoverTicksMap.put(uuid, 0);
+        ascendTicksMap.put(uuid, 0);
         lastSafeLocation.put(uuid, loc);
     }
 
-    /**
-     * Sincronizăm teleportările serverului pentru a preveni alertele false (False Positives).
-     * Dacă un admin dă TP unui jucător, locația sigură trebuie resetată imediat.
-     */
     @EventHandler(priority = EventPriority.MONITOR)
     public void onPlayerTeleport(PlayerTeleportEvent event) {
         if (event.isCancelled()) return;
@@ -151,29 +171,68 @@ public class Fly implements Listener {
         if (to != null) {
             resetTicksAndSafeLocation(uuid, to);
             lastPosMap.put(uuid, new double[]{to.getX(), to.getY(), to.getZ()});
+            bounceImmunity.put(uuid, System.currentTimeMillis() + 1000L); // Protecție după teleportare
         }
     }
 
     @EventHandler
     public void onPlayerQuit(PlayerQuitEvent event) {
         UUID uuid = event.getPlayer().getUniqueId();
-        airTicks.remove(uuid);
+        hoverTicksMap.remove(uuid);
+        ascendTicksMap.remove(uuid);
+        bounceImmunity.remove(uuid);
         lastSafeLocation.remove(uuid);
         lastPosMap.remove(uuid);
     }
 
-    private boolean hasSolidBlockNear(Location loc) {
-        Block blockDirectlyBelow = loc.clone().subtract(0, 0.1, 0).getBlock();
-        if (blockDirectlyBelow.getType().isSolid() || blockDirectlyBelow.isLiquid()) {
-            return true;
-        }
+    private boolean isNearGround(Location loc) {
+        int minX = (int) Math.floor(loc.getX() - 0.3);
+        int maxX = (int) Math.floor(loc.getX() + 0.3);
+        int minY = (int) Math.floor(loc.getY() - 0.5);
+        int maxY = (int) Math.floor(loc.getY() + 0.5);
+        int minZ = (int) Math.floor(loc.getZ() - 0.3);
+        int maxZ = (int) Math.floor(loc.getZ() + 0.3);
 
-        double expand = 0.3;
-        for (double x = -expand; x <= expand; x += expand) {
-            for (double z = -expand; z <= expand; z += expand) {
-                for (double y = 0.1; y <= 1.5; y += 0.5) {
-                    Block block = loc.clone().add(x, -y, z).getBlock();
-                    if (block.getType().isSolid() || block.isLiquid()) {
+        for (int bx = minX; bx <= maxX; bx++) {
+            for (int by = minY; by <= maxY; by++) {
+                for (int bz = minZ; bz <= maxZ; bz++) {
+                    Block block = loc.getWorld().getBlockAt(bx, by, bz);
+                    Material type = block.getType();
+
+                    if (type.isAir()) continue;
+                    if (type.isSolid()) return true;
+
+                    String name = type.name();
+                    if (name.contains("SNOW") || name.contains("CARPET") || name.contains("SLAB") ||
+                            name.contains("STEP") || name.contains("STAIRS") || name.contains("FENCE") ||
+                            name.contains("WALL") || name.contains("LILY") || name.contains("WATER") ||
+                            name.contains("LAVA") || name.contains("LADDER") || name.contains("VINE")) {
+                        return true;
+                    }
+                }
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Scanăm dacă jucătorul atinge / a aterizat pe un bloc care îl aruncă în sus (Bounce).
+     */
+    private boolean isBouncyBlock(Location loc) {
+        int minX = (int) Math.floor(loc.getX() - 0.3);
+        int maxX = (int) Math.floor(loc.getX() + 0.3);
+        // Ne interesează exclusiv blocurile DE SUB jucător pentru efectul de bounce
+        int minY = (int) Math.floor(loc.getY() - 0.5);
+        int maxY = (int) Math.floor(loc.getY());
+        int minZ = (int) Math.floor(loc.getZ() - 0.3);
+        int maxZ = (int) Math.floor(loc.getZ() + 0.3);
+
+        for (int bx = minX; bx <= maxX; bx++) {
+            for (int by = minY; by <= maxY; by++) {
+                for (int bz = minZ; bz <= maxZ; bz++) {
+                    String name = loc.getWorld().getBlockAt(bx, by, bz).getType().name();
+                    // Orice variantă de BED sau SLIME_BLOCK dă bounce în Vanilla
+                    if (name.contains("SLIME") || name.contains("BED")) {
                         return true;
                     }
                 }

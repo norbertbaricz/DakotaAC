@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<project xmlns="http://maven.apache.org/POM/4.0.0"
-         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-         xsi:schemaLocation="https://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+<project xmlns="http://apache.org"
+         xmlns:xsi="http://w3.org"
+         xsi:schemaLocation="https://apache.org https://apache.org">
 
     <modelVersion>4.0.0</modelVersion>
 
@@ -13,7 +13,7 @@
     <name>DakotaAC</name>
 
     <properties>
-        <java.version>25</java.version>
+        <java.version>21</java.version>
         <maven.compiler.source>${java.version}</maven.compiler.source>
         <maven.compiler.target>${java.version}</maven.compiler.target>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
@@ -24,19 +24,13 @@
         <!-- PaperMC -->
         <repository>
             <id>papermc-repo</id>
-            <url>https://repo.papermc.io/repository/maven-public/</url>
-        </repository>
-
-        <!-- ProtocolLib -->
-        <repository>
-            <id>dmulloy2-repo</id>
-            <url>https://repo.dmulloy2.net/repository/public/</url>
+            <url>https://papermc.io</url>
         </repository>
 
         <!-- Maven Central -->
         <repository>
             <id>central</id>
-            <url>https://repo.maven.apache.org/maven2/</url>
+            <url>https://apache.org</url>
         </repository>
 
     </repositories>
@@ -51,7 +45,7 @@
             <scope>provided</scope>
         </dependency>
 
-        <!-- ProtocolLib -->
+        <!-- ProtocolLib - METODA LOCALĂ DIRECTĂ -->
         <dependency>
             <groupId>com.comphenix.protocol</groupId>
             <artifactId>ProtocolLib</artifactId>
@@ -89,6 +83,30 @@
                         </goals>
                         <configuration>
                             <createDependencyReducedPom>false</createDependencyReducedPom>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+
+            <!-- Plugin adăugat pentru upload automat pe VPS prin SCP -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-antrun-plugin</artifactId>
+                <version>3.1.0</version>
+                <executions>
+                    <execution>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>run</goal>
+                        </goals>
+                        <configuration>
+                            <target>
+                                <echo message="Se trimite pluginul DakotaAC pe VPS..."/>
+                                <exec executable="scp" failonerror="true">
+                                    <arg value="target/${project.build.finalName}.jar"/>
+                                    <arg value="root@100.120.106.101:/home/raul/Development/plugins/"/>
+                                </exec>
+                            </target>
                         </configuration>
                     </execution>
                 </executions>

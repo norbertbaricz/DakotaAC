@@ -1,5 +1,6 @@
 package skypixel;
 
+import org.bukkit.entity.Player;
 import org.bukkit.plugin.java.JavaPlugin;
 import com.comphenix.protocol.ProtocolLibrary;
 import skypixel.Combat.*;
@@ -18,13 +19,9 @@ import java.util.Map;
 
 public final class dakotaAC extends JavaPlugin {
 
-    // Instanța pluginului pentru a o putea accesa din alte clase
     private static dakotaAC instance;
-
-    // Stocăm starea check-urilor (Activat/Dezactivat)
     private static final Map<String, Boolean> activeChecks = new HashMap<>();
 
-    // --- SETĂRI PENTRU PUNISHMENTS ---
     private static boolean autoKick;
     private static boolean autoBan;
     private static int maxKickFlags;
@@ -36,85 +33,103 @@ public final class dakotaAC extends JavaPlugin {
 
         org.bukkit.command.ConsoleCommandSender console = getServer().getConsoleSender();
         String version = getDescription().getVersion();
-        String prefix = org.bukkit.ChatColor.translateAlternateColorCodes('&', "&8[&cDakotaAC&8] &7");
 
-        // --- STARTUP UI ÎN CONSOLĂ ---
         console.sendMessage(org.bukkit.ChatColor.DARK_GRAY + "--------------------------------------------------");
         console.sendMessage(org.bukkit.ChatColor.RED + "" + org.bukkit.ChatColor.BOLD + " DakotaAC " + org.bukkit.ChatColor.GRAY + "v" + version);
 
-        // ==========================================================
-        // DEPENDENCY CHECK: Verificăm dacă ProtocolLib este instalat!
-        // ==========================================================
-        if (getServer().getPluginManager().getPlugin("ProtocolLib") == null) {
-            console.sendMessage(org.bukkit.ChatColor.DARK_RED + " [CRITICAL ERROR] ProtocolLib is missing!");
-            console.sendMessage(org.bukkit.ChatColor.RED + " DakotaAC requires ProtocolLib to intercept network packets.");
-            console.sendMessage(org.bukkit.ChatColor.RED + " Please install ProtocolLib. The Anti-Cheat will now disable itself.");
+        try {
+            // DEPENDENCY CHECK
+            if (getServer().getPluginManager().getPlugin("ProtocolLib") == null) {
+                console.sendMessage(org.bukkit.ChatColor.DARK_RED + " [CRITICAL ERROR] ProtocolLib is missing!");
+                console.sendMessage(org.bukkit.ChatColor.RED + " DakotaAC requires ProtocolLib to intercept network packets.");
+                console.sendMessage(org.bukkit.ChatColor.RED + " Please install ProtocolLib. The Anti-Cheat will now disable itself.");
+                console.sendMessage(org.bukkit.ChatColor.DARK_GRAY + "--------------------------------------------------");
+
+                notifyStaff(org.bukkit.ChatColor.DARK_RED + "CRITICAL ERROR: ProtocolLib is missing! Plugin disabled. Contact Developer!", true);
+
+                getServer().getPluginManager().disablePlugin(this);
+                return;
+            }
+
+            console.sendMessage(org.bukkit.ChatColor.YELLOW + " Initializing high-performance security modules...");
+
+            saveDefaultConfig();
+            loadConfigSettings();
+            registerListeners();
+
+            getCommand("report").setExecutor(new Report());
+            getCommand("report").setTabCompleter(new Report());
+
+            getCommand("dakotaac").setExecutor(new Dakota());
+            getCommand("dakotaac").setTabCompleter(new Dakota());
+
+            console.sendMessage(org.bukkit.ChatColor.GREEN + " [System] All modules loaded successfully. Zero errors.");
+            console.sendMessage(org.bukkit.ChatColor.GREEN + " [System] Server is now fully protected!");
             console.sendMessage(org.bukkit.ChatColor.DARK_GRAY + "--------------------------------------------------");
 
-            // Auto-dezactivăm pluginul
-            getServer().getPluginManager().disablePlugin(this);
+            // Mesaj direct către Staff în joc, cu sunet de SUCCES
+            notifyStaff(org.bukkit.ChatColor.GREEN + "System started successfully! Zero errors detected. Server is protected.", false);
 
-            // Folosim "return" pentru a opri imediat execuția metodei onEnable().
-            return;
+        } catch (Exception e) {
+            console.sendMessage(org.bukkit.ChatColor.DARK_RED + " [CRITICAL ERROR] A fatal error occurred during startup!");
+            e.printStackTrace();
+            console.sendMessage(org.bukkit.ChatColor.DARK_GRAY + "--------------------------------------------------");
+
+            // Mesaj direct către Staff în joc, cu sunet de EROARE
+            notifyStaff(org.bukkit.ChatColor.DARK_RED + "CRITICAL ERROR during startup! Modules might be offline. Check console and contact Developer immediately!", true);
         }
-
-        console.sendMessage(org.bukkit.ChatColor.YELLOW + " Initializing high-performance security modules...");
-
-        // 1. Încărcăm Configurațiile și Modulele
-        saveDefaultConfig();
-        loadConfigSettings();
-
-        // 2. Înregistrăm Evenimentele (Listeners)
-        registerListeners();
-
-        // 3. Înregistrăm Comenzile
-        // Înregistrăm comanda /report
-        getCommand("report").setExecutor(new Report());
-        getCommand("report").setTabCompleter(new Report());
-
-        // Înregistrăm comanda /dakotaac
-        getCommand("dakotaac").setExecutor(new Dakota());
-        getCommand("dakotaac").setTabCompleter(new Dakota());
-
-        // Mesajul de succes din consolă
-        console.sendMessage(org.bukkit.ChatColor.GREEN + " [System] All modules loaded successfully. Zero errors.");
-        console.sendMessage(org.bukkit.ChatColor.GREEN + " [System] Server is now fully protected!");
-        console.sendMessage(org.bukkit.ChatColor.DARK_GRAY + "--------------------------------------------------");
-
-        // Broadcast pentru staff-ul online
-        getServer().broadcast(prefix + org.bukkit.ChatColor.GREEN + "System started successfully! Zero errors detected.", "dakotaac.startup");
     }
 
     @Override
     public void onDisable() {
         org.bukkit.command.ConsoleCommandSender console = getServer().getConsoleSender();
-        String prefix = org.bukkit.ChatColor.translateAlternateColorCodes('&', "&8[&cDakotaAC&8] &7");
 
-        // --- PREVENIRE LAG ȘI BUG-URI LA RELOAD ---
+        // Curățare memorie preventivă
         skypixel.Render.Tracers.cleanupAllDecoys();
         skypixel.Render.ESP.cleanupAll();
         skypixel.Misc.AntiBot.cleanupAllBots();
-        skypixel.Combat.AutoArmor.cleanupAllDecoys(); // Adaugat cleanup-ul proaspat pentru AutoArmor!
+        skypixel.Combat.AutoArmor.cleanupAllDecoys();
 
-        // 1. Ștergem listener-ele din ProtocolLib pentru a preveni erorile de la PlugManX
         if (getServer().getPluginManager().getPlugin("ProtocolLib") != null) {
             ProtocolLibrary.getProtocolManager().removePacketListeners(this);
         }
 
-        // --- SHUTDOWN UI ÎN CONSOLĂ ---
         console.sendMessage(org.bukkit.ChatColor.DARK_GRAY + "--------------------------------------------------");
         console.sendMessage(org.bukkit.ChatColor.RED + "" + org.bukkit.ChatColor.BOLD + " DakotaAC " + org.bukkit.ChatColor.GRAY + "is shutting down.");
         console.sendMessage(org.bukkit.ChatColor.YELLOW + " [System] Security modules are now OFFLINE.");
         console.sendMessage(org.bukkit.ChatColor.DARK_GRAY + "--------------------------------------------------");
 
-        getServer().broadcast(prefix + org.bukkit.ChatColor.RED + "System shutting down... Server is exposed!", "dakotaac.startup");
+        // Alerta la oprire / reload
+        notifyStaff(org.bukkit.ChatColor.RED + "System shutting down... Server is exposed!", true);
     }
 
     /**
-     * Încarcă setările generale și starea fiecărui modul din config.yml
+     * SISTEMUL "GLONȚ DE ARGINT" PENTRU NOTIFICĂRI
+     * Trimite mesajul direct oricărui jucător care are OP sau permisiunea de admin.
      */
+    public void notifyStaff(String message, boolean isError) {
+        String prefix = org.bukkit.ChatColor.translateAlternateColorCodes('&', "&8[&cDakotaAC&8] ");
+
+        for (Player p : getServer().getOnlinePlayers()) {
+            if (p.hasPermission("dakotaac.admin") || p.isOp()) {
+                p.sendMessage(prefix + message);
+
+                try {
+                    if (isError) {
+                        // Sunet de eroare (Bass grav)
+                        p.playSound(p.getLocation(), org.bukkit.Sound.BLOCK_NOTE_BLOCK_BASS, 1.0f, 0.5f);
+                    } else {
+                        // Sunet de succes (XP Orb)
+                        p.playSound(p.getLocation(), org.bukkit.Sound.ENTITY_EXPERIENCE_ORB_PICKUP, 1.0f, 1.0f);
+                    }
+                } catch (Exception ignored) {
+                    // Ignorăm erorile de sunet în caz că serverul folosește o versiune prea veche de MC
+                }
+            }
+        }
+    }
+
     public void loadConfigSettings() {
-        // Forțează serverul să citească ultima versiune a fișierului de pe disc
         reloadConfig();
 
         autoKick = getConfig().getBoolean("Settings.Auto-Kick", false);
@@ -123,17 +138,10 @@ public final class dakotaAC extends JavaPlugin {
         maxBanFlags = getConfig().getInt("Settings.Max-Ban-Flags", 30);
         flagPlayer.alertsEnabled = getConfig().getBoolean("Settings.Notifications", true);
 
-        // Încărcăm starea modulelor direct din fișierul config.yml
         initializeChecks();
-
-        // Am eliminat saveConfig() de aici pentru a-ți proteja comentariile (#) făcute manual în fișier!
     }
 
-    /**
-     * Sincronizează harta din memorie cu fișierul config.yml
-     */
     private void initializeChecks() {
-        // Combat
         loadModuleState("AimBot");
         loadModuleState("AutoArmor");
         loadModuleState("AutoClicker");
@@ -142,8 +150,6 @@ public final class dakotaAC extends JavaPlugin {
         loadModuleState("KillAura");
         loadModuleState("Reach");
         loadModuleState("Velocity");
-
-        // Exploit
         loadModuleState("GhostHand");
         loadModuleState("GodMode");
         loadModuleState("Phase");
@@ -151,13 +157,9 @@ public final class dakotaAC extends JavaPlugin {
         loadModuleState("ServerCrasher");
         loadModuleState("Teleport");
         loadModuleState("Regen");
-
-        // Fun & Misc
         loadModuleState("Derp");
         loadModuleState("AntiBot");
         loadModuleState("Spammer");
-
-        // Movement
         loadModuleState("Fly");
         loadModuleState("HighJump");
         loadModuleState("InventoryMove");
@@ -168,21 +170,15 @@ public final class dakotaAC extends JavaPlugin {
         loadModuleState("Speed");
         loadModuleState("Sprint");
         loadModuleState("Step");
-
-        // Player
         loadModuleState("AntiVoid");
         loadModuleState("ChestStealer");
         loadModuleState("FastUse");
         loadModuleState("InventoryCleaner");
         loadModuleState("Version");
         loadModuleState("AntiVPN");
-
-        // Render
         loadModuleState("ESP");
         loadModuleState("Tracers");
         loadModuleState("XRay");
-
-        // World
         loadModuleState("FastBreak");
         loadModuleState("FastPlace");
         loadModuleState("Fucker");
@@ -190,24 +186,15 @@ public final class dakotaAC extends JavaPlugin {
         loadModuleState("Scaffold");
     }
 
-    /**
-     * Citește starea 'enabled' a unui modul din config. Dacă nu există, fallback pe true.
-     */
     private void loadModuleState(String moduleName) {
-        // Noua structură: Modules.AimBot.enabled
         String path = "Modules." + moduleName + ".enabled";
-
-        // Citim valoarea din config. Dacă linia nu există, luăm 'true' ca valoare default
         boolean isActive = getConfig().getBoolean(path, true);
-
-        // Actualizăm DOAR în memoria pluginului, nu și pe disc, ca să păstrăm structura și comentariile
         activeChecks.put(moduleName, isActive);
     }
 
     private void registerListeners() {
         org.bukkit.plugin.PluginManager pm = getServer().getPluginManager();
 
-        // Combat
         pm.registerEvents(new AimBot(), this);
         pm.registerEvents(new AutoArmor(), this);
         pm.registerEvents(new AutoClicker(), this);
@@ -216,8 +203,6 @@ public final class dakotaAC extends JavaPlugin {
         pm.registerEvents(new KillAura(), this);
         pm.registerEvents(new Reach(), this);
         pm.registerEvents(new Velocity(), this);
-
-        // Exploit
         pm.registerEvents(new GhostHand(), this);
         pm.registerEvents(new GodMode(), this);
         pm.registerEvents(new Phase(), this);
@@ -225,13 +210,9 @@ public final class dakotaAC extends JavaPlugin {
         pm.registerEvents(new ServerCrasher(), this);
         pm.registerEvents(new Teleport(), this);
         pm.registerEvents(new Regen(), this);
-
-        // Fun & Misc
         pm.registerEvents(new Derp(), this);
         pm.registerEvents(new Spammer(), this);
         pm.registerEvents(new AntiBot(), this);
-
-        // Movement
         pm.registerEvents(new Fly(), this);
         pm.registerEvents(new HighJump(), this);
         pm.registerEvents(new InventoryMove(), this);
@@ -242,53 +223,31 @@ public final class dakotaAC extends JavaPlugin {
         pm.registerEvents(new Speed(), this);
         pm.registerEvents(new Sprint(), this);
         pm.registerEvents(new Step(), this);
-
-        // Player
         pm.registerEvents(new AntiVoid(), this);
         pm.registerEvents(new ChestStealer(), this);
         pm.registerEvents(new FastUse(), this);
         pm.registerEvents(new InventoryCleaner(), this);
         pm.registerEvents(new Version(), this);
         pm.registerEvents(new AntiVPN(), this);
-
-        // Render
         pm.registerEvents(new ESP(), this);
         pm.registerEvents(new Tracers(), this);
         pm.registerEvents(new XRay(), this);
-
-        // World
         pm.registerEvents(new FastBreak(), this);
         pm.registerEvents(new FastPlace(), this);
         pm.registerEvents(new Fucker(), this);
         pm.registerEvents(new Nuker(), this);
         pm.registerEvents(new Scaffold(), this);
-
-        // Notification System
         pm.registerEvents(new Violation(), this);
     }
 
-    // ==========================================================
-    // METODE API (Folosite în alte clase)
-    // ==========================================================
     public static dakotaAC getInstance() { return instance; }
+    public static Map<String, Boolean> getChecks() { return activeChecks; }
+    public static boolean isCheckActive(String checkName) { return activeChecks.getOrDefault(checkName, false); }
 
-    public static Map<String, Boolean> getChecks() {
-        return activeChecks;
-    }
-
-    public static boolean isCheckActive(String checkName) {
-        return activeChecks.getOrDefault(checkName, false);
-    }
-
-    /**
-     * Schimbă starea 'enabled' a unui modul și salvează decizia în config.yml permanent!
-     */
     public static void toggleCheck(String moduleName) {
         if (activeChecks.containsKey(moduleName)) {
             boolean newState = !activeChecks.get(moduleName);
             activeChecks.put(moduleName, newState);
-
-            // Salvăm folosind noua structură (Modules.NumeModul.enabled)
             instance.getConfig().set("Modules." + moduleName + ".enabled", newState);
             instance.saveConfig();
         }
@@ -316,7 +275,7 @@ public final class dakotaAC extends JavaPlugin {
         maxBanFlags = ban;
         instance.getConfig().set("Settings.Max-Kick-Flags", maxKickFlags);
         instance.getConfig().set("Settings.Max-Ban-Flags", maxBanFlags);
-        instance.getConfig().set("Settings.Max-Flags", null); // Curățăm variabila veche
+        instance.getConfig().set("Settings.Max-Flags", null);
         instance.saveConfig();
     }
 
