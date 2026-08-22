@@ -18,10 +18,13 @@ commands:
       - dac
       - anticheat
   report:
-      description: Raporteaza un jucator suspect
-      usage: /report <jucator>
+    description: Report a suspicious player.
+    usage: /report <player>
 
 permissions:
   dakotaac.command:
     description: Allows access to DakotaAC commands.
+    default: op
+  dakotaac.admin:
+    description: Allows receiving report notifications and viewing the report book.
     default: op

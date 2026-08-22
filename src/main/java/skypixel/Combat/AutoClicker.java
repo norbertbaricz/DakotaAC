@@ -20,12 +20,22 @@ import java.util.concurrent.ConcurrentLinkedQueue;
 
 public class AutoClicker implements Listener {
 
-    private static final int CPS_LIMIT = 20;
+    // ==========================================
+    // SETĂRI UȘOR DE REGLAT (EASY TO TUNE)
+    // ==========================================
+    // Limita maximă de click-uri pe secundă (CPS) permisă.
+    // Un om normal face 6-10 CPS. Cei care folosesc Butterfly/Drag click pot atinge 15-20.
+    // Peste 20 este garantat macro sau AutoClicker inuman.
+    private static final int MAX_ALLOWED_CPS = 20;
+
+    // Fereastra de timp în care contorizăm click-urile (1000ms = 1 secundă)
+    private static final long TIME_WINDOW_MS = 1000L;
+    // ==========================================
 
     // Folosim colecții Thread-Safe pentru istoricul click-urilor
     private final ConcurrentHashMap<UUID, ConcurrentLinkedQueue<Long>> clickHistory = new ConcurrentHashMap<>();
 
-    // NOU: Urmărim exact starea de minat a clientului din pachetele de rețea
+    // Urmărim exact starea de minat a clientului din pachetele de rețea
     private final ConcurrentHashMap<UUID, Boolean> isMining = new ConcurrentHashMap<>();
 
     public AutoClicker() {
@@ -70,7 +80,7 @@ public class AutoClicker implements Listener {
                             if (type == PacketType.Play.Client.ARM_ANIMATION) {
 
                                 // FIX MAJOR: Dacă știm că jucătorul minează chiar acum, ignorăm animațiile!
-                                // Acest filtru absoarbe toate cele 20 de pachete trimise natural de joc în timpul minatului.
+                                // Acest filtru absoarbe toate pachetele trimise natural de joc în timpul minatului.
                                 if (isMining.getOrDefault(uuid, false)) {
                                     return;
                                 }
@@ -82,15 +92,18 @@ public class AutoClicker implements Listener {
 
                                 history.add(now);
 
-                                while (!history.isEmpty() && history.peek() < now - 1000) {
+                                // Curățăm istoricul: ștergem click-urile care sunt mai vechi de o secundă (TIME_WINDOW_MS)
+                                while (!history.isEmpty() && history.peek() < now - TIME_WINDOW_MS) {
                                     history.poll();
                                 }
 
                                 int currentCPS = history.size();
 
-                                if (currentCPS > CPS_LIMIT) {
-                                    history.clear();
+                                // Verificăm dacă a depășit limita setată de noi
+                                if (currentCPS > MAX_ALLOWED_CPS) {
+                                    history.clear(); // Îi curățăm buffer-ul ca să nu primească spam de mesaje
 
+                                    // Trimitem flag-ul pe thread-ul principal (Bukkit) ca să fie sigur și curat
                                     Bukkit.getScheduler().runTask(dakotaAC.getPlugin(dakotaAC.class), () -> {
                                         if (player.isOnline()) {
                                             flagPlayer.addFlag(player, "AutoClicker", "Inhuman CPS detected (" + currentCPS + " CPS).");
@@ -109,6 +122,7 @@ public class AutoClicker implements Listener {
 
     @EventHandler
     public void onPlayerQuit(PlayerQuitEvent event) {
+        // Prevenim scurgerile de memorie (Memory Leaks)
         UUID uuid = event.getPlayer().getUniqueId();
         clickHistory.remove(uuid);
         isMining.remove(uuid);

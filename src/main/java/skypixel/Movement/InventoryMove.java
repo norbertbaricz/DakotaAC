@@ -5,7 +5,6 @@ import com.comphenix.protocol.ProtocolLibrary;
 import com.comphenix.protocol.events.PacketAdapter;
 import com.comphenix.protocol.events.PacketEvent;
 import org.bukkit.Bukkit;
-import org.bukkit.Location;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
@@ -21,6 +20,20 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
 public class InventoryMove implements Listener {
+
+    // ==========================================
+    // SETĂRI UȘOR DE REGLAT (EASY TO TUNE)
+    // ==========================================
+    // Viteza maximă pe plan orizontal (XZ) permisă cu meniul deschis.
+    // 0.15 acoperă mersul normal cu hack-ul pornit.
+    private static final double MAX_GUI_SPEED_XZ = 0.15;
+
+    // Viteza maximă de săritură (Y) permisă cu meniul deschis.
+    private static final double MAX_GUI_SPEED_Y = 0.10;
+
+    // Câte pachete ilegale acceptăm înainte de a acționa? (Iartă lag-ul și ping-ul)
+    private static final int MAX_VIOLATIONS = 3;
+    // ==========================================
 
     // Folosim colecții concurente pentru a preveni crash-urile pe thread-urile asincrone Netty
     private final ConcurrentHashMap<UUID, Boolean> openGUIs = new ConcurrentHashMap<>();
@@ -54,9 +67,9 @@ public class InventoryMove implements Listener {
                             // ==========================================
                             if (type == PacketType.Play.Client.WINDOW_CLICK) {
                                 // În Vanilla, nu poți sprinta și da click în inventar simultan.
-                                // Verificăm starea de sprint (sigură de citit) și starea onGround din rețea.
                                 boolean onGround = lastGroundMap.getOrDefault(uuid, true);
 
+                                // player.isSprinting() citește doar un flag boolean, deci este safe asincron.
                                 if (player.isSprinting() && onGround) {
                                     // Anulăm pachetul din zbor! Nu va putea muta itemul.
                                     event.setCancelled(true);
@@ -74,7 +87,7 @@ public class InventoryMove implements Listener {
                             // ==========================================
                             // LOGICA 2: MIȘCAREA CU GUI EXTERN DESCHIS
                             // ==========================================
-                            // Dacă nu are un GUI extern deschis, salvăm datele și ieșim.
+                            // Dacă nu are un GUI extern deschis, salvăm datele și ieșim rapid.
                             if (!openGUIs.containsKey(uuid)) {
                                 updatePositionData(event, uuid);
                                 return;
@@ -102,34 +115,49 @@ public class InventoryMove implements Listener {
                                 return;
                             }
 
-                            // Ignorăm căderea (gravitația normală) sau situațiile legitime
-                            if (deltaY < 0 || player.isInsideVehicle() || player.isSwimming() || player.isGliding()) {
+                            // Ignorăm căderea (gravitația normală) asincron
+                            if (deltaY < 0) {
                                 updatePositionData(event, uuid);
                                 return;
                             }
 
-                            // Când un jucător merge intenționat dXZ depășește 0.15. Saltul face dY pozitiv.
-                            if (deltaY > 0.1 || deltaXZ > 0.15) {
+                            // Dacă depășește limitele de mișcare setate
+                            if (deltaY > MAX_GUI_SPEED_Y || deltaXZ > MAX_GUI_SPEED_XZ) {
                                 int vl = violationBuffer.getOrDefault(uuid, 0) + 1;
                                 violationBuffer.put(uuid, vl);
 
-                                // Folosim VL 3 pentru a ierta situațiile în care pachetele de mișcare
-                                // s-au "intersectat" pe rețea cu pachetul de deschidere a cufărului (Ping Lag).
-                                if (vl > 3) {
-                                    // Anulăm pachetul -> Jucătorul e înghețat virtual
+                                if (vl > MAX_VIOLATIONS) {
+                                    // Anulăm pachetul asincron (Înghețăm jucătorul pe ecranul lui)
                                     event.setCancelled(true);
 
+                                    // FIX MAJOR: Facem un "Double-Check" pe Main Thread înainte să dăm flag!
+                                    // Verificăm dacă viteza a fost cauzată de server (Knockback, Gheață, Vehicule).
                                     Bukkit.getScheduler().runTask(dakotaAC.getPlugin(dakotaAC.class), () -> {
-                                        if (player.isOnline()) {
-                                            flagPlayer.addFlag(player, "InventoryMove", "Walking/Jumping with GUI open (dXZ: " + String.format("%.2f", deltaXZ) + ")");
+                                        if (!player.isOnline() || player.isDead()) return;
+
+                                        // Dacă serverul i-a dat knockback, e în apă, zboară cu elytra sau e în barcă:
+                                        if (player.getNoDamageTicks() > 10 ||
+                                                player.getVelocity().lengthSquared() > 0.05 ||
+                                                player.isInsideVehicle() ||
+                                                player.isSwimming() ||
+                                                player.isGliding()) {
+
+                                            // E nevinovat! Iertăm suspiciunile și îi lăsăm meniul deschis.
+                                            violationBuffer.put(uuid, 0);
+                                            return;
                                         }
+
+                                        // Dacă ajunge aici, înseamnă că s-a mișcat 100% din propriile butoane!
+                                        flagPlayer.addFlag(player, "InventoryMove", "Walking/Jumping with GUI open (dXZ: " + String.format("%.2f", deltaXZ) + ")");
                                     });
                                 }
                             } else {
-                                violationBuffer.remove(uuid);
+                                // Dacă mișcarea e mică (se rotește sau a alunecat un pixel), îl iertăm treptat
+                                int vl = violationBuffer.getOrDefault(uuid, 0);
+                                if (vl > 0) violationBuffer.put(uuid, vl - 1);
                             }
 
-                            // Dacă pachetul n-a fost anulat, îi salvăm poziția curentă
+                            // Dacă pachetul n-a fost anulat de ProtocolLib, îi salvăm poziția curentă
                             if (!event.isCancelled()) {
                                 updatePositionData(event, uuid);
                             }

@@ -155,7 +155,7 @@ public final class dakotaAC extends JavaPlugin {
         loadModuleState("Phase");
         loadModuleState("PingSpoof");
         loadModuleState("ServerCrasher");
-        loadModuleState("Teleport");
+        loadModuleState("Blink");
         loadModuleState("Regen");
         loadModuleState("Derp");
         loadModuleState("AntiBot");
@@ -163,7 +163,7 @@ public final class dakotaAC extends JavaPlugin {
         loadModuleState("Fly");
         loadModuleState("HighJump");
         loadModuleState("InventoryMove");
-        loadModuleState("LiquidWalk");
+        loadModuleState("Jesus");
         loadModuleState("NoFall");
         loadModuleState("NoSlowDown");
         loadModuleState("Sneak");
@@ -208,7 +208,7 @@ public final class dakotaAC extends JavaPlugin {
         pm.registerEvents(new Phase(), this);
         pm.registerEvents(new PingSpoof(), this);
         pm.registerEvents(new ServerCrasher(), this);
-        pm.registerEvents(new Teleport(), this);
+        pm.registerEvents(new Blink(), this);
         pm.registerEvents(new Regen(), this);
         pm.registerEvents(new Derp(), this);
         pm.registerEvents(new Spammer(), this);
@@ -216,7 +216,7 @@ public final class dakotaAC extends JavaPlugin {
         pm.registerEvents(new Fly(), this);
         pm.registerEvents(new HighJump(), this);
         pm.registerEvents(new InventoryMove(), this);
-        pm.registerEvents(new LiquidWalk(), this);
+        pm.registerEvents(new Jesus(), this);
         pm.registerEvents(new NoFall(), this);
         pm.registerEvents(new NoSlowDown(), this);
         pm.registerEvents(new Sneak(), this);

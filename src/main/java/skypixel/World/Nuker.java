@@ -14,17 +14,32 @@ import org.bukkit.event.player.PlayerQuitEvent;
 import skypixel.Notification.flagPlayer;
 import skypixel.dakotaAC;
 
-import java.util.LinkedList;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentLinkedQueue;
 
 public class Nuker implements Listener {
+
+    // ==========================================
+    // SETĂRI UȘOR DE REGLAT (EASY TO TUNE)
+    // ==========================================
+    // Fereastra de timp pentru spargerea susținută
+    private static final long TIME_WINDOW_MS = 1000L;
+
+    // Viteza inumană maximă pe secundă. Oamenii dau cam 10-15 click-uri pe secundă (CPS).
+    private static final int MAX_BLOCKS_PER_SECOND = 25;
+
+    // Fereastra de timp pentru Burst (spargere simultană a mai multor blocuri)
+    private static final long BURST_WINDOW_MS = 50L;
+
+    // Câte blocuri are voie să înceapă să spargă într-un Burst de 50ms?
+    private static final int MAX_BURST_BLOCKS = 4;
+    // ==========================================
 
     // Folosim o hartă concurentă pentru acces rapid și stabil asincron
     private final ConcurrentHashMap<UUID, Tracker> breakHistory = new ConcurrentHashMap<>();
 
     public Nuker() {
-        // Interceptăm pachetele brute de minare trimise de client
         ProtocolLibrary.getProtocolManager().addPacketListener(
                 new PacketAdapter(dakotaAC.getPlugin(dakotaAC.class),
                         com.comphenix.protocol.events.ListenerPriority.HIGHEST,
@@ -36,13 +51,14 @@ public class Nuker implements Listener {
                             if (!dakotaAC.isCheckActive("Nuker")) return;
 
                             Player player = event.getPlayer();
-                            if (player == null) return;
 
-                            // Extragem acțiunea din pachet
+                            // FIX CRITIC: Verificăm creativul asincron, înainte să anulăm vreun pachet!
+                            // În versiunile moderne de Paper, player.getGameMode() este thread-safe.
+                            if (player == null || player.getGameMode() == GameMode.CREATIVE) return;
+
                             EnumWrappers.PlayerDigType action = event.getPacket().getPlayerDigTypes().readSafely(0);
 
-                            // Hack-urile Nuker trimit un val de START_DESTROY_BLOCK pentru fiecare bloc din raza de acțiune.
-                            // Contorizând direct intenția de start, oprim hack-ul din prima milisecundă.
+                            // Contorizăm doar intenția de a începe spargerea
                             if (action != EnumWrappers.PlayerDigType.START_DESTROY_BLOCK) {
                                 return;
                             }
@@ -53,63 +69,62 @@ public class Nuker implements Listener {
                             breakHistory.putIfAbsent(uuid, new Tracker());
                             Tracker tracker = breakHistory.get(uuid);
 
-                            // Sincronizăm accesul pentru a proteja LinkedList-ul de avalanșa de pachete (previne Crash-urile)
-                            synchronized (tracker) {
-                                tracker.breaks.add(now);
+                            tracker.breaks.add(now);
 
-                                // Curățăm din memorie blocurile lovite cu mai mult de 1 secundă în urmă
-                                tracker.breaks.removeIf(time -> time < now - 1000);
+                            // Curățăm asincron și sigur pachetele mai vechi de 1 secundă
+                            while (!tracker.breaks.isEmpty() && tracker.breaks.peek() < now - TIME_WINDOW_MS) {
+                                tracker.breaks.poll();
+                            }
 
-                                boolean flagged = false;
-                                String reason = "";
+                            boolean flagged = false;
+                            String reason = "";
 
-                                // --------------------------------------------------------
-                                // LOGICA 1: BURST NUKER (Spargere instantanee pe zonă)
-                                // --------------------------------------------------------
-                                if (tracker.breaks.size() >= 4) {
-                                    long timeForLast4Blocks = now - tracker.breaks.get(tracker.breaks.size() - 4);
+                            // --------------------------------------------------------
+                            // LOGICA 1: BURST NUKER (Spargere instantanee pe zonă)
+                            // --------------------------------------------------------
+                            int burstCount = 0;
+                            for (Long time : tracker.breaks) {
+                                if (now - time <= BURST_WINDOW_MS) {
+                                    burstCount++;
+                                }
+                            }
 
-                                    // A atins 4 blocuri noi în sub 50ms (Imposibil fără mouse macro sau hack)
-                                    if (timeForLast4Blocks < 50) {
-                                        flagged = true;
-                                        reason = "Broke 4 blocks simultaneously (" + timeForLast4Blocks + "ms).";
-                                    }
+                            if (burstCount >= MAX_BURST_BLOCKS) {
+                                flagged = true;
+                                reason = "Attempted to break " + burstCount + " blocks simultaneously (under " + BURST_WINDOW_MS + "ms).";
+                            }
+
+                            // --------------------------------------------------------
+                            // LOGICA 2: SUSTAINED NUKER (Viteză inumană per secundă)
+                            // --------------------------------------------------------
+                            int totalBreaks = tracker.breaks.size();
+                            if (!flagged && totalBreaks > MAX_BLOCKS_PER_SECOND) {
+                                flagged = true;
+                                reason = "Inhuman breaking speed (" + totalBreaks + " blocks/sec).";
+                            }
+
+                            // DECIZIA FINALĂ
+                            if (flagged) {
+                                // 1. Oprim blocul din a fi procesat de server (Anulăm pachetul)
+                                event.setCancelled(true);
+
+                                // 2. Prevenim spam-ul către admini
+                                if (!tracker.isFlagged) {
+                                    tracker.isFlagged = true;
+                                    final String finalReason = reason;
+
+                                    // 3. Trimitem Flag-ul sincron (Bukkit)
+                                    Bukkit.getScheduler().runTask(dakotaAC.getPlugin(dakotaAC.class), () -> {
+                                        if (player.isOnline()) {
+                                            flagPlayer.addFlag(player, "Nuker", finalReason);
+                                        }
+                                    });
                                 }
 
-                                // --------------------------------------------------------
-                                // LOGICA 2: SUSTAINED NUKER (Viteză inumană)
-                                // --------------------------------------------------------
-                                if (!flagged && tracker.breaks.size() > 25) {
-                                    flagged = true;
-                                    reason = "Inhuman breaking speed (" + tracker.breaks.size() + " blocks/sec).";
-                                }
-
-                                // DECIZIA
-                                if (flagged) {
-                                    // 1. Oprim blocul din a fi procesat de server (Anulăm pachetul pe loc)
-                                    event.setCancelled(true);
-
-                                    // 2. Prevenim spam-ul pe chat-ul adminilor
-                                    if (!tracker.isFlagged) {
-                                        tracker.isFlagged = true;
-                                        final String finalReason = reason;
-
-                                        // 3. Trimitem Flag-ul sincron (Bukkit)
-                                        Bukkit.getScheduler().runTask(dakotaAC.getPlugin(dakotaAC.class), () -> {
-                                            if (player.isOnline()) {
-                                                // Iertăm creativul aici, pe thread-ul principal, fiind metoda 100% sigură
-                                                if (player.getGameMode() == GameMode.CREATIVE) return;
-
-                                                flagPlayer.addFlag(player, "Nuker", finalReason);
-                                            }
-                                        });
-                                    }
-
-                                    // Resetăm memoria pentru a opri fluxul, dar continuăm să anulăm dacă insistă
-                                    tracker.breaks.clear();
-                                } else {
-                                    tracker.isFlagged = false;
-                                }
+                                // Resetăm logica de analiză ca să lăsăm jucătorul să spargă din nou legitim
+                                tracker.breaks.clear();
+                            } else {
+                                tracker.isFlagged = false;
                             }
 
                         } catch (Exception ex) {
@@ -127,10 +142,10 @@ public class Nuker implements Listener {
     }
 
     /**
-     * Clasă auxiliară dedicată stocării sigure.
+     * Clasă auxiliară dedicată stocării sigure folosind cozi concurente.
      */
     private static class Tracker {
-        final LinkedList<Long> breaks = new LinkedList<>();
+        final ConcurrentLinkedQueue<Long> breaks = new ConcurrentLinkedQueue<>();
         boolean isFlagged = false;
     }
 }

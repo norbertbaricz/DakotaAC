@@ -16,11 +16,28 @@ import org.bukkit.event.player.PlayerQuitEvent;
 import skypixel.Notification.flagPlayer;
 import skypixel.dakotaAC;
 
-import java.util.LinkedList;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentLinkedQueue;
 
 public class ChestStealer implements Listener {
+
+    // ==========================================
+    // SETĂRI UȘOR DE REGLAT (EASY TO TUNE)
+    // ==========================================
+    // Timpul minim de reacție umană (în milisecunde).
+    // Un om normal reacționează vizual în ~200ms. Lăsăm 120ms pentru a acoperi "Ping/Lag Prediction"
+    // (când jucătorul dă click orb unde știe că va fi itemul).
+    private static final long MIN_REACTION_TIME_MS = 120L;
+
+    // Numărul maxim de click-uri (iteme furate) permise pe secundă.
+    // Oamenii cu Shift+Drag-Click pot atinge 10-12.
+    // ChestStealer-ul (Hack-ul) trage 27 de iteme (tot cufărul) în sub 15-20ms.
+    private static final int MAX_CLICKS_PER_SECOND = 15;
+
+    // Fereastra de timp pentru calculul vitezei (1 secundă = 1000ms)
+    private static final long TIME_WINDOW_MS = 1000L;
+    // ==========================================
 
     // Folosim o hartă concurentă pentru a citi datele în siguranță de pe thread-ul de rețea
     private final ConcurrentHashMap<UUID, Tracker> containerData = new ConcurrentHashMap<>();
@@ -41,64 +58,64 @@ public class ChestStealer implements Listener {
                             if (player == null) return;
                             UUID uuid = player.getUniqueId();
 
-                            // Dacă jucătorul nu are un container deschis, ignorăm
+                            // Dacă jucătorul nu are un container extern deschis, ignorăm
                             Tracker tracker = containerData.get(uuid);
                             if (tracker == null) return;
 
                             long now = System.currentTimeMillis();
 
-                            // Bloc Sincronizat: Previne coruperea datelor când hackerul trimite 27 pachete simultan
-                            synchronized (tracker) {
-                                // --------------------------------------------------------
-                                // 1. VERIFICAREA TIMPULUI DE REACȚIE (Instant Loot)
-                                // --------------------------------------------------------
-                                long reactionTime = now - tracker.openTime;
+                            // --------------------------------------------------------
+                            // 1. VERIFICAREA TIMPULUI DE REACȚIE (Instant Loot)
+                            // --------------------------------------------------------
+                            // Calculăm timpul de reacție compensând ping-ul jucătorului!
+                            // Dacă are ping mare, pachetul ajunge mai greu, deci pare că a luat itemul instant.
+                            int ping = player.getPing();
+                            long reactionTime = (now - tracker.openTime) - (ping / 2); // Scădem un sens de rețea
 
-                                // Niciun om nu poate procesa vizual și să dea click în sub 100ms.
-                                if (reactionTime < 100 && !tracker.reactionFlagged) {
-                                    tracker.reactionFlagged = true;
+                            if (reactionTime < MIN_REACTION_TIME_MS && !tracker.reactionFlagged) {
+                                tracker.reactionFlagged = true;
 
-                                    // Anulăm pachetul! Itemul rămâne în cufăr, neatins de hacker.
-                                    event.setCancelled(true);
+                                // Anulăm pachetul pe rețea! Itemul rămâne în cufăr pentru server.
+                                event.setCancelled(true);
 
-                                    // Trimitem flag-ul sincron pentru siguranță
+                                Bukkit.getScheduler().runTask(dakotaAC.getPlugin(dakotaAC.class), () -> {
+                                    if (player.isOnline()) {
+                                        flagPlayer.addFlag(player, "ChestStealer (Reaction)", "Looted instantly after opening (React: " + reactionTime + "ms | Ping: " + ping + "ms).");
+                                    }
+                                });
+                                return;
+                            }
+
+                            // --------------------------------------------------------
+                            // 2. VERIFICAREA VITEZEI DE FURAT (Speed Loot)
+                            // --------------------------------------------------------
+                            tracker.clicks.add(now);
+
+                            // Curățăm eficient click-urile mai vechi de 1 secundă
+                            while (!tracker.clicks.isEmpty() && tracker.clicks.peek() < now - TIME_WINDOW_MS) {
+                                tracker.clicks.poll();
+                            }
+
+                            int currentSpeed = tracker.clicks.size();
+
+                            if (currentSpeed > MAX_CLICKS_PER_SECOND) {
+                                event.setCancelled(true);
+
+                                if (!tracker.speedFlagged) {
+                                    tracker.speedFlagged = true;
+
                                     Bukkit.getScheduler().runTask(dakotaAC.getPlugin(dakotaAC.class), () -> {
                                         if (player.isOnline()) {
-                                            flagPlayer.addFlag(player, "ChestStealer (Reaction)", "Looted instantly after opening (" + reactionTime + "ms).");
+                                            flagPlayer.addFlag(player, "ChestStealer (Speed)", "Inhuman looting speed (" + currentSpeed + " items/sec).");
                                         }
                                     });
-                                    return; // Oprim procesarea acestui click
                                 }
 
-                                // --------------------------------------------------------
-                                // 2. VERIFICAREA VITEZEI DE FURAT (Speed Loot)
-                                // --------------------------------------------------------
-                                tracker.clicks.add(now);
-
-                                // Curățăm click-urile mai vechi de jumătate de secundă (500ms)
-                                tracker.clicks.removeIf(time -> time < now - 500);
-
-                                // Dacă mută mai mult de 5 iteme în jumătate de secundă (10 iteme/secundă), este robot!
-                                if (tracker.clicks.size() > 5) {
-                                    event.setCancelled(true);
-
-                                    // Prevenim spam-ul în consolă (dăm flag o singură dată per rafală)
-                                    if (!tracker.speedFlagged) {
-                                        tracker.speedFlagged = true;
-                                        int currentSpeed = tracker.clicks.size();
-
-                                        Bukkit.getScheduler().runTask(dakotaAC.getPlugin(dakotaAC.class), () -> {
-                                            if (player.isOnline()) {
-                                                flagPlayer.addFlag(player, "ChestStealer (Speed)", "Inhuman looting speed (" + currentSpeed + " items/0.5s).");
-                                            }
-                                        });
-                                    }
-
-                                    // Resetăm memoria de click-uri ca să lăsăm playerul să dea click normal ulterior
-                                    tracker.clicks.clear();
-                                } else {
-                                    tracker.speedFlagged = false;
-                                }
+                                // Îi curățăm buffer-ul parțial ca să îl lăsăm să continue normal dacă a fost un lag spike ciudat
+                                tracker.clicks.clear();
+                            } else {
+                                // Resetăm flag-ul dacă a redus viteza
+                                tracker.speedFlagged = false;
                             }
 
                         } catch (Exception ex) {
@@ -110,7 +127,7 @@ public class ChestStealer implements Listener {
     }
 
     // ========================================================
-    // EVENIMENTE BUKKIT (Folosite doar pentru a marca "deschiderea" cufărului)
+    // EVENIMENTE BUKKIT (Marchează "deschiderea" cufărului)
     // ========================================================
 
     @EventHandler(priority = EventPriority.MONITOR)
@@ -132,7 +149,6 @@ public class ChestStealer implements Listener {
 
     @EventHandler
     public void onInventoryClose(InventoryCloseEvent event) {
-        // Când meniul se închide, eliberăm memoria
         containerData.remove(event.getPlayer().getUniqueId());
     }
 
@@ -152,14 +168,14 @@ public class ChestStealer implements Listener {
      * Clasă auxiliară pentru a ține evidența perfectă a datelor per jucător.
      */
     private static class Tracker {
-        long openTime;
-        LinkedList<Long> clicks;
+        final long openTime;
+        final ConcurrentLinkedQueue<Long> clicks; // 100% Thread-Safe și rapid
         boolean reactionFlagged;
         boolean speedFlagged;
 
         public Tracker(long openTime) {
             this.openTime = openTime;
-            this.clicks = new LinkedList<>();
+            this.clicks = new ConcurrentLinkedQueue<>();
             this.reactionFlagged = false;
             this.speedFlagged = false;
         }

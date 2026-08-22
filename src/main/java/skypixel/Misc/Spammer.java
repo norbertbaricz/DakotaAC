@@ -17,17 +17,28 @@ import java.util.concurrent.ConcurrentHashMap;
 
 public class Spammer implements Listener {
 
+    // ==========================================
+    // SETĂRI UȘOR DE REGLAT (EASY TO TUNE)
+    // ==========================================
+    // Timpul minim (în milisecunde) permis între două mesaje/comenzi. (700 = 0.7 secunde)
+    private static final long MIN_DELAY_BETWEEN_MESSAGES = 700L;
+
+    // Numărul maxim de avertismente (spam-uri anulate) înainte să alertăm adminii
+    private static final int MAX_VIOLATIONS = 3;
+    // ==========================================
+
     // Folosim ConcurrentHashMap deoarece ProtocolLib citește pachetele de chat asincron
     private final ConcurrentHashMap<UUID, Long> lastMessageTime = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<UUID, String> lastMessageText = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<UUID, Integer> spamViolations = new ConcurrentHashMap<>();
 
     public Spammer() {
-        // Interceptăm pachetul CHAT (și variantele moderne pentru 1.19+ dacă sunt prezente)
+        // Interceptăm pachetul CHAT și CHAT_COMMAND (esențial pentru 1.19+)
         ProtocolLibrary.getProtocolManager().addPacketListener(
                 new PacketAdapter(dakotaAC.getPlugin(dakotaAC.class),
                         com.comphenix.protocol.events.ListenerPriority.HIGHEST, // Prioritate maximă pentru a tăia mesajul primul
-                        PacketType.Play.Client.CHAT) {
+                        PacketType.Play.Client.CHAT,
+                        PacketType.Play.Client.CHAT_COMMAND) {
 
                     @Override
                     public void onPacketReceiving(PacketEvent event) {
@@ -43,7 +54,8 @@ public class Spammer implements Listener {
                             // Prevenim erorile în cazul pachetelor de chat goale sau modificate
                             if (message == null || message.trim().isEmpty()) return;
 
-                            String type = message.startsWith("/") ? "Command" : "Chat";
+                            // Tratăm diferențiat, având în vedere că acum prindem și CHAT_COMMAND
+                            String type = (event.getPacketType() == PacketType.Play.Client.CHAT_COMMAND || message.startsWith("/")) ? "Command" : "Chat";
 
                             // Iertăm adminii la comenzi (Verificarea permisiunilor este thread-safe în Bukkit)
                             if (type.equals("Command") && player.hasPermission("dakotaac.admin")) {
@@ -85,8 +97,8 @@ public class Spammer implements Listener {
         boolean isSpam = false;
         String flagReason = "";
 
-        // LOGICA 1: Viteza (Sub 700ms între mesaje)
-        if (now - lastTime < 700) {
+        // LOGICA 1: Viteza (Sub MIN_DELAY_BETWEEN_MESSAGES între mesaje)
+        if (now - lastTime < MIN_DELAY_BETWEEN_MESSAGES) {
             isSpam = true;
             flagReason = "Sending " + type.toLowerCase() + "s too fast.";
         }
@@ -104,8 +116,8 @@ public class Spammer implements Listener {
             vl++;
             spamViolations.put(uuid, vl);
 
-            // Dacă forțează de 3 ori (bot de spam activat), trimitem alerta!
-            if (vl >= 3) {
+            // Dacă forțează de repetate ori (bot de spam activat), trimitem alerta!
+            if (vl >= MAX_VIOLATIONS) {
                 // Trimiterea alertei (flag) trebuie delegată către Main Thread pentru stabilitate
                 final String finalReason = flagReason;
                 Bukkit.getScheduler().runTask(dakotaAC.getPlugin(dakotaAC.class), () -> {
@@ -115,7 +127,7 @@ public class Spammer implements Listener {
                 });
 
                 // Resetăm VL-ul puțin ca să nu facă spam și la noi în consolă
-                spamViolations.put(uuid, 1);
+                spamViolations.put(uuid, MAX_VIOLATIONS - 1);
             }
             return true;
         } else {

@@ -23,13 +23,31 @@ import java.util.concurrent.ConcurrentHashMap;
 
 public class Step implements Listener {
 
+    // ==========================================
+    // SETĂRI UȘOR DE REGLAT (EASY TO TUNE)
+    // ==========================================
+    // Viteza de salt maximă permisă pur Vanilla
+    private static final double BASE_JUMP_Y = 0.425;
+
+    // Înălțimea maximă a unui Step (Slab-urile / Scările au 0.5, Paturile ~0.56, folosim 0.6)
+    private static final double MAX_STEP_Y = 0.6;
+
+    // Multiplicatorul pentru licoarea de Jump Boost
+    private static final double JUMP_BOOST_MULTIPLIER = 0.15;
+
+    // Limita fizică a lumii pentru a preveni crash-urile
+    private static final double MAX_WORLD_COORDINATE = 3.0E7;
+
+    // Câte mișcări imposibile iertăm din cauza lag-ului de rețea?
+    private static final int MAX_VIOLATIONS = 2;
+    // ==========================================
+
     // Colecții concurente pentru siguranță asincronă totală
     private final ConcurrentHashMap<UUID, Long> bounceCooldowns = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<UUID, double[]> lastPosMap = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<UUID, Location> lastSafeLocation = new ConcurrentHashMap<>();
-
-    // NOU: Memorie pentru imunitatea la respawn/tp (Grace Period)
     private final ConcurrentHashMap<UUID, Long> teleportGrace = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<UUID, Integer> stepBuffer = new ConcurrentHashMap<>();
 
     public Step() {
         ProtocolLibrary.getProtocolManager().addPacketListener(
@@ -52,6 +70,14 @@ public class Step implements Listener {
                             double toY = event.getPacket().getDoubles().readSafely(1);
                             double toZ = event.getPacket().getDoubles().readSafely(2);
 
+                            // === PROTECȚIE CRASH EXPLOITS ===
+                            if (Double.isNaN(toX) || Double.isNaN(toY) || Double.isNaN(toZ) ||
+                                    Double.isInfinite(toX) || Double.isInfinite(toY) || Double.isInfinite(toZ) ||
+                                    Math.abs(toX) > MAX_WORLD_COORDINATE || Math.abs(toZ) > MAX_WORLD_COORDINATE) {
+                                event.setCancelled(true);
+                                return;
+                            }
+
                             double[] fromPos = lastPosMap.get(uuid);
 
                             // Înregistrăm coordonatele la prima mișcare
@@ -60,12 +86,9 @@ public class Step implements Listener {
                                 return;
                             }
 
-                            // Y este mereu la indexul 1!
                             double deltaY = toY - fromPos[1];
 
-                            // FIX 1: Desync / Teleport Filter
-                            // Dacă diferența de înălțime este masivă (> 10 blocuri instantaneu),
-                            // este clar un Ghost Packet generat de la o cădere în Void urmată de Respawn.
+                            // Desync / Blink Filter: Dacă diferența este masivă, e un Ghost Packet
                             if (deltaY > 10.0 || deltaY < -10.0) {
                                 return;
                             }
@@ -76,19 +99,18 @@ public class Step implements Listener {
                             // Actualizăm matricea pentru pachetul viitor
                             lastPosMap.put(uuid, new double[]{toX, toY, toZ});
 
-                            // 0. Optimizare Extremă pe Rețea:
-                            // Dacă jucătorul merge drept, cade sau stă pe loc, ignorăm pachetul!
+                            // Optimizare Extremă pe Rețea: Ignorăm mersul drept sau căderea
                             if (deltaY <= 0.0) {
                                 return;
                             }
 
-                            // 1. Delegăm verificările hărții pe Main Thread (Bukkit)
+                            // Delegăm verificările hărții pe Main Thread (Bukkit)
                             Bukkit.getScheduler().runTask(dakotaAC.getPlugin(dakotaAC.class), () -> {
                                 if (!player.isOnline() || player.isDead()) return;
 
                                 Location toLoc = new Location(player.getWorld(), toX, toY, toZ);
 
-                                // FIX 2: Perioada de grație pentru TP / Immediate Respawn
+                                // Perioada de grație pentru TP / Immediate Respawn
                                 long lastTeleport = teleportGrace.getOrDefault(uuid, 0L);
                                 if (System.currentTimeMillis() - lastTeleport < 1000) {
                                     lastSafeLocation.put(uuid, toLoc);
@@ -97,13 +119,14 @@ public class Step implements Listener {
 
                                 Location fromLoc = new Location(player.getWorld(), safeFromPos[0], safeFromPos[1], safeFromPos[2], player.getLocation().getYaw(), player.getLocation().getPitch());
 
-                                // Bypass-uri legitime (fără isFallFlying)
-                                if (player.getAllowFlight() || player.isInsideVehicle() || player.isSwimming() || player.isGliding()) {
+                                // Bypass-uri legitime
+                                if (player.getAllowFlight() || player.isInsideVehicle() || player.isSwimming() || player.isGliding() || player.hasPotionEffect(PotionEffectType.LEVITATION)) {
                                     lastSafeLocation.put(uuid, toLoc);
                                     return;
                                 }
 
-                                if (player.hasPotionEffect(PotionEffectType.LEVITATION)) {
+                                // Knockback de la damage (săritură forțată de server)
+                                if (player.getNoDamageTicks() > 10 || player.getVelocity().getY() > 0.43) {
                                     lastSafeLocation.put(uuid, toLoc);
                                     return;
                                 }
@@ -118,37 +141,52 @@ public class Step implements Listener {
                                     return;
                                 }
 
-                                // Verificăm blocurile pe care se află
+                                // Verificăm blocurile pe care se află (scări, apă, schele)
                                 Material currentBlock = toLoc.getBlock().getType();
                                 if (currentBlock == Material.WATER || currentBlock == Material.LAVA ||
                                         currentBlock == Material.LADDER || currentBlock == Material.VINE ||
-                                        currentBlock.name().contains("SCAFFOLDING") || currentBlock.name().contains("BUBBLE_COLUMN")) {
+                                        currentBlock.name().contains("SCAFFOLDING") || currentBlock.name().contains("BUBBLE_COLUMN") ||
+                                        currentBlock == Material.POWDER_SNOW) {
                                     lastSafeLocation.put(uuid, toLoc);
                                     return;
                                 }
 
-                                // --- LOGICA CORECTATĂ (Baza pe Limite Maxime) ---
-                                double maxAllowedY = 0.425;
+                                // --- LOGICA DE VERIFICARE ---
+                                double maxAllowedY = BASE_JUMP_Y;
 
                                 if (player.hasPotionEffect(PotionEffectType.JUMP_BOOST)) {
                                     int level = player.getPotionEffect(PotionEffectType.JUMP_BOOST).getAmplifier() + 1;
-                                    maxAllowedY += (level * 0.15);
+                                    maxAllowedY += (level * JUMP_BOOST_MULTIPLIER);
                                 }
 
                                 boolean canStepNaturally = isNearStepBlock(toLoc) || isNearStepBlock(fromLoc);
                                 if (canStepNaturally) {
-                                    maxAllowedY = Math.max(maxAllowedY, 0.6);
+                                    maxAllowedY = Math.max(maxAllowedY, MAX_STEP_Y);
                                 }
+
+                                int vl = stepBuffer.getOrDefault(uuid, 0);
 
                                 // EVALUAREA FINALĂ
                                 if (deltaY > maxAllowedY) {
-                                    flagPlayer.addFlag(player, "Step", "Exceeded max Y-step: " + String.format("%.3f", deltaY) + " (Limit: " + maxAllowedY + ")");
+                                    vl++;
+                                    stepBuffer.put(uuid, vl);
 
-                                    // Rubber-Band: Tragem jucătorul înapoi în siguranță pe pământ
-                                    Location safe = lastSafeLocation.getOrDefault(uuid, fromLoc);
-                                    player.teleport(safe, PlayerTeleportEvent.TeleportCause.PLUGIN);
+                                    if (vl >= MAX_VIOLATIONS) {
+                                        flagPlayer.addFlag(player, "Step", "Exceeded max Y-step: " + String.format("%.3f", deltaY) + " (Limit: " + maxAllowedY + ")");
+
+                                        // Oferim imunitate ca Rubber-Band-ul să nu genereze alarme false la HighJump/Fly
+                                        teleportGrace.put(uuid, System.currentTimeMillis() + 1000L);
+
+                                        // Rubber-Band: Tragem jucătorul înapoi în siguranță pe pământ
+                                        Location safe = lastSafeLocation.getOrDefault(uuid, fromLoc);
+                                        player.teleport(safe, PlayerTeleportEvent.TeleportCause.PLUGIN);
+
+                                        // Reducem buffer-ul parțial
+                                        stepBuffer.put(uuid, 1);
+                                    }
                                 } else {
-                                    // Dacă urcarea e legitimă, aceasta devine noua poziție sigură
+                                    // Urcare legitimă
+                                    if (vl > 0) stepBuffer.put(uuid, vl - 1);
                                     lastSafeLocation.put(uuid, toLoc);
                                 }
                             });
@@ -161,9 +199,10 @@ public class Step implements Listener {
         );
     }
 
-    /**
-     * Sincronizare vitală pentru prevenirea Rubber-Band-ului fals la /tp.
-     */
+    // ========================================================
+    // PROTECȚII LA ALARME FALSE (TELEPORT / RESPAWN)
+    // ========================================================
+
     @EventHandler(priority = EventPriority.MONITOR)
     public void onPlayerTeleport(PlayerTeleportEvent event) {
         if (event.isCancelled()) return;
@@ -177,17 +216,13 @@ public class Step implements Listener {
         }
     }
 
-    /**
-     * FIX 3: Sincronizare pentru Respawn. Previne Ghost Packets-urile din Void.
-     */
     @EventHandler(priority = EventPriority.MONITOR)
     public void onPlayerRespawn(PlayerRespawnEvent event) {
         UUID uuid = event.getPlayer().getUniqueId();
         Location to = event.getRespawnLocation();
 
-        teleportGrace.put(uuid, System.currentTimeMillis()); // 1 secundă grație
+        teleportGrace.put(uuid, System.currentTimeMillis());
 
-        // Tăiem calculul matematic uriaș de la momentul decesului setând locația nouă direct
         lastSafeLocation.put(uuid, to);
         lastPosMap.put(uuid, new double[]{to.getX(), to.getY(), to.getZ()});
     }
@@ -199,7 +234,12 @@ public class Step implements Listener {
         lastPosMap.remove(uuid);
         lastSafeLocation.remove(uuid);
         teleportGrace.remove(uuid);
+        stepBuffer.remove(uuid);
     }
+
+    // ========================================================
+    // VERIFICĂRI DE FIZICĂ
+    // ========================================================
 
     private boolean isNearBouncingBlock(Location loc) {
         int x = loc.getBlockX();

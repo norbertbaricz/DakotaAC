@@ -72,7 +72,7 @@ public class NoFall implements Listener {
                                 return;
                             }
 
-                            // 1. Verificare Imunitate (Teleport / Moarte / Respawn)
+                            // 1. Verificare Imunitate (Blink / Moarte / Respawn)
                             if (teleportImmunity.containsKey(uuid) && teleportImmunity.get(uuid) > System.currentTimeMillis()) {
                                 lastPosMap.put(uuid, new double[]{toX, toY, toZ});
                                 realFallDistanceMap.put(uuid, 0.0);

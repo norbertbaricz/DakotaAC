@@ -24,6 +24,22 @@ import java.util.concurrent.ConcurrentHashMap;
 
 public class HighJump implements Listener {
 
+    // ==========================================
+    // SETĂRI UȘOR DE REGLAT (EASY TO TUNE)
+    // ==========================================
+    // Viteza maximă pe axa Y (în sus) pe care o poate prinde un jucător Vanilla fără efecte.
+    private static final double BASE_JUMP_VELOCITY = 0.425;
+
+    // Cât adaugă fiecare nivel de Jump Boost la săritură.
+    private static final double JUMP_BOOST_MULTIPLIER = 0.15;
+
+    // Marja de eroare oferită când jucătorul sare + pășește pe un bloc complex (ex: Slab/Gard)
+    private static final double COMPLEX_BLOCK_BUFFER = 0.6;
+
+    // Timpul de imunitate (milisecunde) la Rubber-Band după TP/Spawn
+    private static final long GRACE_PERIOD_MS = 1000L;
+    // ==========================================
+
     private final ConcurrentHashMap<UUID, Long> bounceCooldowns = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<UUID, double[]> lastPosMap = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<UUID, Location> lastSafeLocation = new ConcurrentHashMap<>();
@@ -56,22 +72,23 @@ public class HighJump implements Listener {
                                 return;
                             }
 
-                            // 1. Verificare Imunitate (Grace Period)
+                            // 1. Verificare Imunitate (Grace Period asincron)
                             if (teleportImmunity.containsKey(uuid) && teleportImmunity.get(uuid) > System.currentTimeMillis()) {
                                 lastPosMap.put(uuid, new double[]{toX, toY, toZ});
                                 return;
                             }
 
                             double deltaY = toY - fromPos[1];
-
                             lastPosMap.put(uuid, new double[]{toX, toY, toZ});
 
-                            // 2. Optimizare extremă pe thread-ul de rețea (ignoram căderile și step-urile perfecte pe slab)
+                            // 2. OPTIMIZARE EXTREMĂ PE REȚEA
+                            // Ignorăm complet căderile (<= 0) sau urcatul perfect pe un slab/scară (0.5)
+                            // Salvăm zeci de verificări pe secundă în Bukkit.
                             if (deltaY <= 0.0 || deltaY == 0.5) {
                                 return;
                             }
 
-                            // 3. Delegăm verificările fizice către Main Thread
+                            // 3. Delegăm verificările fizice complexe către Main Thread
                             Bukkit.getScheduler().runTask(dakotaAC.getPlugin(dakotaAC.class), () -> {
                                 if (!player.isOnline() || player.isDead()) return;
 
@@ -84,13 +101,13 @@ public class HighJump implements Listener {
                                     return;
                                 }
 
-                                // Knockback din damage
+                                // Knockback din damage (jucătorul tocmai a fost lovit și aruncat în sus)
                                 if (player.getNoDamageTicks() > 10) {
                                     lastSafeLocation.put(uuid, toLoc);
                                     return;
                                 }
 
-                                // Verificăm blocurile care propulsează
+                                // Verificăm blocurile care propulsează (Slime, Pat)
                                 if (isNearBouncingBlock(toLoc) || isNearBouncingBlock(fromLoc)) {
                                     bounceCooldowns.put(uuid, System.currentTimeMillis() + 2000L);
                                 }
@@ -100,25 +117,25 @@ public class HighJump implements Listener {
                                     return;
                                 }
 
+                                // Apă curentă sau Bubble Columns
                                 if (isInBubbleColumn(toLoc)) {
                                     lastSafeLocation.put(uuid, toLoc);
                                     return;
                                 }
 
-                                // Calculăm viteza maximă permisă (Vanilla Jump)
-                                double maxJumpVelocity = 0.425;
+                                // Calculăm viteza maximă permisă
+                                double maxJumpVelocity = BASE_JUMP_VELOCITY;
                                 if (player.hasPotionEffect(PotionEffectType.JUMP_BOOST)) {
                                     int level = player.getPotionEffect(PotionEffectType.JUMP_BOOST).getAmplifier() + 1;
-                                    maxJumpVelocity += (level * 0.15);
+                                    maxJumpVelocity += (level * JUMP_BOOST_MULTIPLIER);
                                 }
 
-                                // NOU: Verificăm dacă e lângă un bloc complex (Covor, Gard, etc.)
-                                // Dacă este, îi dăm o marjă de eroare pentru "Step-Up" în același tick cu săritura.
+                                // Verificăm dacă e lângă un bloc complex pe care poate face "Step-Up" simultan cu săritura
                                 if (isNearComplexBlock(fromLoc) || isNearComplexBlock(toLoc)) {
-                                    maxJumpVelocity += 0.6; // Acoperă un salt normal + urcarea unui slab/covor simultan
+                                    maxJumpVelocity += COMPLEX_BLOCK_BUFFER;
                                 }
 
-                                // Plasă de siguranță server-side (bypass dacă serverul îl împinge)
+                                // Plasă de siguranță server-side (bypass dacă serverul îl împinge prin Velocity)
                                 if (player.getVelocity().getY() > maxJumpVelocity) {
                                     lastSafeLocation.put(uuid, toLoc);
                                     return;
@@ -126,12 +143,15 @@ public class HighJump implements Listener {
 
                                 // === LOGICA DE BAZĂ ===
                                 if (deltaY > maxJumpVelocity) {
-                                    flagPlayer.addFlag(player, "HighJump", "Impossible jump velocity (Y-Speed: " + String.format("%.3f", deltaY) + ")");
+                                    flagPlayer.addFlag(player, "HighJump / Fly", "Impossible jump velocity (Y-Speed: " + String.format("%.3f", deltaY) + " | Max: " + String.format("%.3f", maxJumpVelocity) + ")");
 
                                     Location safe = lastSafeLocation.getOrDefault(uuid, player.getLocation());
-                                    teleportImmunity.put(uuid, System.currentTimeMillis() + 1000L);
+
+                                    // Îi dăm imunitate temporară ca Rubber-Band-ul să nu genereze alte alarme
+                                    teleportImmunity.put(uuid, System.currentTimeMillis() + GRACE_PERIOD_MS);
                                     player.teleport(safe, PlayerTeleportEvent.TeleportCause.PLUGIN);
                                 } else {
+                                    // Locația a fost curată, o putem folosi ca punct sigur pe viitor
                                     lastSafeLocation.put(uuid, toLoc);
                                 }
                             });
@@ -144,6 +164,10 @@ public class HighJump implements Listener {
         );
     }
 
+    // ========================================================
+    // PROTECȚII LA ALARME FALSE
+    // ========================================================
+
     @EventHandler(priority = EventPriority.MONITOR)
     public void onPlayerTeleport(PlayerTeleportEvent event) {
         if (event.isCancelled()) return;
@@ -153,7 +177,7 @@ public class HighJump implements Listener {
         if (to != null) {
             lastSafeLocation.put(uuid, to);
             lastPosMap.put(uuid, new double[]{to.getX(), to.getY(), to.getZ()});
-            teleportImmunity.put(uuid, System.currentTimeMillis() + 1000L);
+            teleportImmunity.put(uuid, System.currentTimeMillis() + GRACE_PERIOD_MS);
         }
     }
 
@@ -182,6 +206,10 @@ public class HighJump implements Listener {
         teleportImmunity.remove(uuid);
     }
 
+    // ========================================================
+    // VERIFICĂRI DE FIZICĂ (Slime, Paturi, Garduri, Covoare)
+    // ========================================================
+
     private boolean isNearBouncingBlock(Location loc) {
         int x = loc.getBlockX();
         int minY = loc.getBlockY() - 2;
@@ -203,11 +231,11 @@ public class HighJump implements Listener {
 
     private boolean isInBubbleColumn(Location loc) {
         Material blockAt = loc.getBlock().getType();
-        return blockAt.name().contains("BUBBLE_COLUMN");
+        return blockAt.name().contains("BUBBLE_COLUMN") || blockAt == Material.WATER;
     }
 
     /**
-     * NOU: Scanează blocurile complexe (cu Hitbox neregulat) pe care jucătorul
+     * Scanează blocurile complexe (cu Hitbox neregulat) pe care jucătorul
      * s-ar putea urca (Step) în același timp în care sare.
      */
     private boolean isNearComplexBlock(Location loc) {
@@ -215,8 +243,6 @@ public class HighJump implements Listener {
         int maxX = (int) Math.floor(loc.getX() + 0.3);
         int minY = (int) Math.floor(loc.getY() - 0.5); // Căutăm puțin și sub picioare
         int maxY = (int) Math.floor(loc.getY() + 1.5); // Acoperă înălțimea gardurilor (1.5)
-
-        // Aceste două rânduri lipseau:
         int minZ = (int) Math.floor(loc.getZ() - 0.3);
         int maxZ = (int) Math.floor(loc.getZ() + 0.3);
 
@@ -236,7 +262,8 @@ public class HighJump implements Listener {
                             name.contains("WALL") ||
                             name.contains("TRAPDOOR") ||
                             name.contains("BED") ||
-                            name.contains("LILY")) {
+                            name.contains("LILY") ||
+                            name.contains("SCAFFOLDING")) {
                         return true;
                     }
                 }

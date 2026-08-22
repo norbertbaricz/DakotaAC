@@ -7,8 +7,11 @@ import com.comphenix.protocol.events.PacketEvent;
 import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
+import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
 import org.bukkit.event.player.PlayerQuitEvent;
+import org.bukkit.event.player.PlayerRespawnEvent;
+import org.bukkit.event.player.PlayerTeleportEvent;
 import skypixel.Notification.flagPlayer;
 import skypixel.dakotaAC;
 
@@ -16,6 +19,22 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
 public class Derp implements Listener {
+
+    // ==========================================
+    // SETĂRI UȘOR DE REGLAT (EASY TO TUNE)
+    // ==========================================
+    // Jucătorii Vanilla nu pot privi mai sus de 90 sau mai jos de -90.
+    // Folosim 90.1 pentru a ierta rotunjirile matematice ciudate de pe rețea.
+    private static final float MAX_PITCH = 90.1f;
+
+    // Viteza inumană maximă de rotație a capului între 2 pachete (adică în ~50ms)
+    private static final float MAX_YAW_SWIPE = 150.0f;
+    private static final float COMBINED_YAW_SWIPE = 100.0f;
+    private static final float COMBINED_PITCH_SWIPE = 40.0f;
+
+    // Câte mișcări haotice consecutive sunt permise? (Absoarbe flick-urile extreme din mouse)
+    private static final int MAX_VIOLATIONS = 3;
+    // ==========================================
 
     // Folosim ConcurrentHashMap pentru stabilitate pe thread-ul de rețea (ProtocolLib)
     private final ConcurrentHashMap<UUID, Integer> derpBuffer = new ConcurrentHashMap<>();
@@ -48,9 +67,8 @@ public class Derp implements Listener {
                             // --------------------------------------------------------
                             // LOGICA 1: Gâtul Rupt (Impossible Pitch)
                             // --------------------------------------------------------
-                            if (Math.abs(currentPitch) > 90.0f) {
+                            if (Math.abs(currentPitch) > MAX_PITCH) {
                                 // Anulăm pachetul direct pe rețea!
-                                // Serverul nu va ști niciodată că jucătorul și-a rotit capul.
                                 event.setCancelled(true);
 
                                 // Trimiterea alertei o facem pe Main Thread
@@ -83,12 +101,12 @@ public class Derp implements Listener {
                                 int vl = derpBuffer.getOrDefault(uuid, 0);
 
                                 // Detectăm mișcările extrem de inumane
-                                if ((deltaYaw > 100.0f && deltaPitch > 40.0f) || deltaYaw > 150.0f) {
+                                if ((deltaYaw > COMBINED_YAW_SWIPE && deltaPitch > COMBINED_PITCH_SWIPE) || deltaYaw > MAX_YAW_SWIPE) {
                                     vl++;
                                     derpBuffer.put(uuid, vl);
 
-                                    if (vl > 3) {
-                                        // Anulăm mișcarea ilegală (Nu mai e nevoie de event.setTo!)
+                                    if (vl > MAX_VIOLATIONS) {
+                                        // Anulăm mișcarea ilegală (Nu e nevoie de player.teleport, pachetul pur și simplu nu se aplică)
                                         event.setCancelled(true);
 
                                         Bukkit.getScheduler().runTask(dakotaAC.getPlugin(dakotaAC.class), () -> {
@@ -97,11 +115,12 @@ public class Derp implements Listener {
                                             }
                                         });
 
-                                        derpBuffer.put(uuid, 1);
+                                        // Resetăm parțial pentru a evita spam-ul
+                                        derpBuffer.put(uuid, MAX_VIOLATIONS - 1);
                                         return; // Dacă l-am prins, nu salvăm rotația curentă ca fiind una "validă"
                                     }
                                 } else {
-                                    // Dacă joacă normal, îi reducem din suspiciune
+                                    // Dacă joacă normal, îi reducem din suspiciune (Decay)
                                     if (vl > 0) {
                                         derpBuffer.put(uuid, vl - 1);
                                     }
@@ -119,9 +138,24 @@ public class Derp implements Listener {
         );
     }
 
+    // ========================================================
+    // PROTECȚII LA ALARME FALSE (TELEPORT / RESPAWN)
+    // ========================================================
+
+    @EventHandler(priority = EventPriority.MONITOR)
+    public void onPlayerTeleport(PlayerTeleportEvent event) {
+        // Când serverul rotește jucătorul forțat, curățăm istoricul pentru a nu-l detecta ca SpinBot
+        if (event.isCancelled()) return;
+        lastRotation.remove(event.getPlayer().getUniqueId());
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR)
+    public void onPlayerRespawn(PlayerRespawnEvent event) {
+        lastRotation.remove(event.getPlayer().getUniqueId());
+    }
+
     @EventHandler
     public void onPlayerQuit(PlayerQuitEvent event) {
-        // Prevenim Memory Leaks
         UUID uuid = event.getPlayer().getUniqueId();
         derpBuffer.remove(uuid);
         lastRotation.remove(uuid);

@@ -24,6 +24,22 @@ import java.util.concurrent.ConcurrentHashMap;
 
 public class AntiVoid implements Listener {
 
+    // ==========================================
+    // SETĂRI UȘOR DE REGLAT (EASY TO TUNE)
+    // ==========================================
+    // Câte blocuri sub limita lumii trebuie să fie ca să îl verificăm?
+    private static final double VOID_THRESHOLD_DEPTH = 5.0;
+
+    // Câte blocuri are voie să "sară" brusc din Void pentru a fi considerat Blink?
+    private static final double MAX_VOID_UPWARD_DISTANCE = 5.0;
+
+    // Timpul de imunitate la verificarea Void-Blink după TP/Respawn (salvează lag-ul)
+    private static final long GRACE_PERIOD_MS = 2000L;
+
+    // Limita fizică a lumii pentru a preveni crash-urile
+    private static final double MAX_WORLD_COORDINATE = 3.0E7;
+    // ==========================================
+
     private final ConcurrentHashMap<UUID, double[]> lastPosMap = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<UUID, Double> minHeightMap = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<UUID, Long> lastTeleportTime = new ConcurrentHashMap<>();
@@ -49,6 +65,14 @@ public class AntiVoid implements Listener {
                             double toZ = event.getPacket().getDoubles().readSafely(2);
                             boolean onGround = event.getPacket().getBooleans().readSafely(0);
 
+                            // === PROTECȚIE CRASH EXPLOITS ===
+                            if (Double.isNaN(toX) || Double.isNaN(toY) || Double.isNaN(toZ) ||
+                                    Double.isInfinite(toX) || Double.isInfinite(toY) || Double.isInfinite(toZ) ||
+                                    Math.abs(toX) > MAX_WORLD_COORDINATE || Math.abs(toZ) > MAX_WORLD_COORDINATE) {
+                                event.setCancelled(true);
+                                return;
+                            }
+
                             double[] fromPos = lastPosMap.get(uuid);
 
                             if (fromPos == null) {
@@ -66,18 +90,21 @@ public class AntiVoid implements Listener {
 
                             // --------------------------------------------------------
                             // LOGICA 1: Ground Spoof în Void
+                            // Hackerii trimit onGround = true în timp ce cad pentru a nu lua damage
                             // --------------------------------------------------------
-                            if (toY < minHeight - 5.0 && onGround) {
+                            if (toY < (minHeight - VOID_THRESHOLD_DEPTH) && onGround) {
                                 isVoidSpoof = true;
                             }
 
                             // --------------------------------------------------------
                             // LOGICA 2: The Rubberband (Blink din Void)
+                            // Hackerul a căzut, își activează Fly/Blink și zboară înapoi pe insulă
                             // --------------------------------------------------------
-                            if (fromY < minHeight && deltaY > 5.0) {
+                            if (fromY < minHeight && deltaY > MAX_VOID_UPWARD_DISTANCE) {
                                 long timeSinceTeleport = System.currentTimeMillis() - lastTeleportTime.getOrDefault(uuid, 0L);
-                                // Dacă au trecut mai mult de 1000ms de la ultimul TP/Respawn
-                                if (timeSinceTeleport > 1000) {
+
+                                // Verificăm dacă nu cumva tocmai a dat respawn
+                                if (timeSinceTeleport > GRACE_PERIOD_MS) {
                                     isVoidBlink = true;
                                 }
                             }
@@ -96,7 +123,7 @@ public class AntiVoid implements Listener {
                                     }
                                 });
 
-                                return; // Nu îi salvăm poziția falsă în memorie!
+                                return; // Oprim execuția pentru a nu salva poziția falsă în memorie!
                             }
 
                             // Dacă pachetul e curat, actualizăm memoria
@@ -139,8 +166,6 @@ public class AntiVoid implements Listener {
         }
     }
 
-    // ---> EVENIMENTE NOI ADAUGATE AICI <---
-
     @EventHandler(priority = EventPriority.MONITOR)
     public void onPlayerDeath(PlayerDeathEvent event) {
         UUID uuid = event.getEntity().getUniqueId();
@@ -155,8 +180,10 @@ public class AntiVoid implements Listener {
 
         // Când dă click pe Respawn, actualizăm direct poziția de start pentru viitorul pachet
         lastPosMap.put(uuid, new double[]{to.getX(), to.getY(), to.getZ()});
-        // Resetăm timer-ul pentru a reînnoi acea secundă de imunitate (1000ms)
+
+        // Resetăm timer-ul pentru a reînnoi imunitatea
         lastTeleportTime.put(uuid, System.currentTimeMillis());
+
         // Actualizăm limita lumii în caz că patul de respawn este în altă dimensiune
         minHeightMap.put(uuid, (double) to.getWorld().getMinHeight());
     }

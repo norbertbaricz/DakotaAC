@@ -1,43 +1,190 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<project xmlns="http://apache.org"
-         xmlns:xsi="http://w3.org"
-         xsi:schemaLocation="https://apache.org https://apache.org">
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
 
     <modelVersion>4.0.0</modelVersion>
 
+    <!-- =========================================================
+         PROJECT INFORMATION
+         ========================================================= -->
     <groupId>play.skypixel</groupId>
     <artifactId>DakotaAC</artifactId>
     <version>0.17</version>
     <packaging>jar</packaging>
 
     <name>DakotaAC</name>
+    <description>High-performance logic-based AntiCheat for Minecraft.</description>
 
+    <!-- =========================================================
+         GLOBAL BUILD SETTINGS
+         ========================================================= -->
     <properties>
+
+        <!-- Java version -->
         <java.version>21</java.version>
-        <maven.compiler.source>${java.version}</maven.compiler.source>
-        <maven.compiler.target>${java.version}</maven.compiler.target>
+
+        <!-- Project encoding -->
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
+
     </properties>
 
+    <!-- =========================================================
+         BUILD CONFIGURATION
+         ========================================================= -->
+    <build>
+
+        <!-- Default Maven goal -->
+        <defaultGoal>clean package</defaultGoal>
+
+        <plugins>
+
+            <!-- =================================================
+                 JAVA COMPILER
+                 ================================================= -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <version>3.14.0</version>
+
+                <configuration>
+
+                    <!-- Compile using Java 21 -->
+                    <release>${java.version}</release>
+
+                    <!-- UTF-8 source encoding -->
+                    <encoding>${project.build.sourceEncoding}</encoding>
+
+                    <!-- Show compiler warnings -->
+                    <showWarnings>true</showWarnings>
+
+                </configuration>
+            </plugin>
+
+            <!-- =================================================
+                 SHADE PLUGIN
+                 ================================================= -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-shade-plugin</artifactId>
+                <version>3.6.0</version>
+
+                <executions>
+                    <execution>
+
+                        <!-- Run during package phase -->
+                        <phase>package</phase>
+
+                        <goals>
+                            <goal>shade</goal>
+                        </goals>
+
+                        <configuration>
+
+                            <!-- Prevent creation of dependency-reduced-pom.xml -->
+                            <createDependencyReducedPom>false</createDependencyReducedPom>
+
+                        </configuration>
+
+                    </execution>
+                </executions>
+            </plugin>
+
+            <!-- =================================================
+                 AUTOMATIC VPS SCP UPLOAD
+                 ================================================= -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-antrun-plugin</artifactId>
+                <version>3.1.0</version>
+
+                <executions>
+                    <execution>
+
+                        <!-- Unique execution ID -->
+                        <id>scp-deploy-to-vps</id>
+
+                        <!-- Run after the JAR has been packaged -->
+                        <phase>package</phase>
+
+                        <goals>
+                            <goal>run</goal>
+                        </goals>
+
+                        <configuration>
+                            <target>
+
+                                <!-- =================================================
+                                     UPLOAD START
+                                     ================================================= -->
+                                <echo level="info"
+                                      message="Uploading DakotaAC plugin to VPS..."/>
+
+                                <!-- =================================================
+                                     DEVELOPMENT SERVER
+                                     ================================================= -->
+                                <echo level="info"
+                                      message="Uploading DakotaAC to Development..."/>
+
+                                <exec executable="scp"
+                                      failonerror="true">
+
+                                    <arg value="target/${project.build.finalName}.jar"/>
+
+                                    <arg value="root@100.120.106.101:/home/raul/Development/plugins/"/>
+
+                                </exec>
+
+                                <!-- =================================================
+                                     UPLOAD COMPLETE
+                                     ================================================= -->
+                                <echo level="info"
+                                      message="DakotaAC plugin uploaded successfully to Development."/>
+
+                            </target>
+                        </configuration>
+
+                    </execution>
+                </executions>
+            </plugin>
+
+        </plugins>
+
+        <!-- =========================================================
+             RESOURCES
+             ========================================================= -->
+        <resources>
+
+            <resource>
+                <directory>src/main/resources</directory>
+                <filtering>true</filtering>
+            </resource>
+
+        </resources>
+
+    </build>
+
+    <!-- =========================================================
+         PAPERMc REPOSITORY
+         ========================================================= -->
     <repositories>
 
-        <!-- PaperMC -->
         <repository>
             <id>papermc-repo</id>
-            <url>https://papermc.io</url>
-        </repository>
-
-        <!-- Maven Central -->
-        <repository>
-            <id>central</id>
-            <url>https://apache.org</url>
+            <url>https://repo.papermc.io/repository/maven-public/</url>
         </repository>
 
     </repositories>
 
+    <!-- =========================================================
+         DEPENDENCIES
+         ========================================================= -->
     <dependencies>
 
-        <!-- Paper API -->
+        <!-- =====================================================
+             PAPER API
+             ===================================================== -->
         <dependency>
             <groupId>io.papermc.paper</groupId>
             <artifactId>paper-api</artifactId>
@@ -45,82 +192,16 @@
             <scope>provided</scope>
         </dependency>
 
-        <!-- ProtocolLib - METODA LOCALĂ DIRECTĂ -->
+        <!-- =====================================================
+             PROTOCOLLIB
+             ===================================================== -->
         <dependency>
             <groupId>com.comphenix.protocol</groupId>
             <artifactId>ProtocolLib</artifactId>
             <version>5.5.0-SNAPSHOT</version>
-            <scope>system</scope>
-            <systemPath>${project.basedir}/libs/ProtocolLib.jar</systemPath>
+            <scope>provided</scope>
         </dependency>
 
     </dependencies>
-
-    <build>
-
-        <defaultGoal>clean package</defaultGoal>
-
-        <plugins>
-
-            <plugin>
-                <groupId>org.apache.maven.plugins</groupId>
-                <artifactId>maven-compiler-plugin</artifactId>
-                <version>3.14.0</version>
-                <configuration>
-                    <release>${java.version}</release>
-                </configuration>
-            </plugin>
-
-            <plugin>
-                <groupId>org.apache.maven.plugins</groupId>
-                <artifactId>maven-shade-plugin</artifactId>
-                <version>3.6.0</version>
-                <executions>
-                    <execution>
-                        <phase>package</phase>
-                        <goals>
-                            <goal>shade</goal>
-                        </goals>
-                        <configuration>
-                            <createDependencyReducedPom>false</createDependencyReducedPom>
-                        </configuration>
-                    </execution>
-                </executions>
-            </plugin>
-
-            <!-- Plugin adăugat pentru upload automat pe VPS prin SCP -->
-            <plugin>
-                <groupId>org.apache.maven.plugins</groupId>
-                <artifactId>maven-antrun-plugin</artifactId>
-                <version>3.1.0</version>
-                <executions>
-                    <execution>
-                        <phase>package</phase>
-                        <goals>
-                            <goal>run</goal>
-                        </goals>
-                        <configuration>
-                            <target>
-                                <echo message="Se trimite pluginul DakotaAC pe VPS..."/>
-                                <exec executable="scp" failonerror="true">
-                                    <arg value="target/${project.build.finalName}.jar"/>
-                                    <arg value="root@100.120.106.101:/home/raul/Development/plugins/"/>
-                                </exec>
-                            </target>
-                        </configuration>
-                    </execution>
-                </executions>
-            </plugin>
-
-        </plugins>
-
-        <resources>
-            <resource>
-                <directory>src/main/resources</directory>
-                <filtering>true</filtering>
-            </resource>
-        </resources>
-
-    </build>
 
 </project>

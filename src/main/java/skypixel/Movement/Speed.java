@@ -11,6 +11,8 @@ import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
+import org.bukkit.event.player.PlayerBedEnterEvent;
+import org.bukkit.event.player.PlayerBedLeaveEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.event.player.PlayerRespawnEvent;
 import org.bukkit.event.player.PlayerTeleportEvent;
@@ -30,10 +32,12 @@ public class Speed implements Listener {
     private static final double MAX_SPEED_BASE = 0.28; // Viteza Vanilla la sprint
     private static final double SPEED_TOLERANCE_MULTIPLIER = 1.15; // Marja de eroare generală
 
-    // Praguri specifice pentru mecanici care cresc viteza în Vanilla
     private static final double THRESHOLD_STAIRS_SLABS = 0.62; // Viteza admisă pe scări / slab-uri
     private static final double THRESHOLD_ICE = 0.65; // Viteza admisă când aluneci pe gheață
     private static final double THRESHOLD_ICE_CEILING = 1.30; // Viteza "Headhitter" (Gheață + Tavan)
+
+    // Limita fizică a lumii pentru a preveni crash-urile matematice
+    private static final double MAX_WORLD_COORDINATE = 3.0E7;
     // ==========================================
 
     private final ConcurrentHashMap<UUID, Double> violations = new ConcurrentHashMap<>();
@@ -61,6 +65,14 @@ public class Speed implements Listener {
                             double toY = event.getPacket().getDoubles().readSafely(1);
                             double toZ = event.getPacket().getDoubles().readSafely(2);
 
+                            // === PROTECȚIE CRASH EXPLOITS ===
+                            if (Double.isNaN(toX) || Double.isNaN(toY) || Double.isNaN(toZ) ||
+                                    Double.isInfinite(toX) || Double.isInfinite(toY) || Double.isInfinite(toZ) ||
+                                    Math.abs(toX) > MAX_WORLD_COORDINATE || Math.abs(toZ) > MAX_WORLD_COORDINATE) {
+                                event.setCancelled(true);
+                                return;
+                            }
+
                             double[] fromPos = lastPosMap.get(uuid);
 
                             if (fromPos == null) {
@@ -72,7 +84,7 @@ public class Speed implements Listener {
                             double deltaZ = toZ - fromPos[2];
                             double deltaXZ = Math.hypot(deltaX, deltaZ);
 
-                            // Ghost Packet / Extreme Desync limit (Ignorăm TP-urile false masive)
+                            // Ghost Packet / Extreme Desync limit
                             if (deltaXZ > 10.0) return;
 
                             final double[] safeFromPos = {fromPos[0], fromPos[1], fromPos[2]};
@@ -84,7 +96,7 @@ public class Speed implements Listener {
                             Bukkit.getScheduler().runTask(dakotaAC.getPlugin(dakotaAC.class), () -> {
                                 if (!player.isOnline() || player.isDead()) return;
 
-                                // Perioadă de grație teleport / respawn
+                                // Perioadă de grație teleport / respawn / bed
                                 long lastTeleport = teleportGrace.getOrDefault(uuid, 0L);
                                 if (System.currentTimeMillis() - lastTeleport < 1000) {
                                     violations.put(uuid, 0.0);
@@ -92,8 +104,16 @@ public class Speed implements Listener {
                                     return;
                                 }
 
-                                // Excepții Vanilla
-                                if (player.getAllowFlight() || player.isInsideVehicle() || player.isSwimming() || player.isGliding()) {
+                                // Excepții Vanilla (Am adăugat verificarea pentru pat)
+                                if (player.getAllowFlight() || player.isInsideVehicle() || player.isSwimming() || player.isGliding() || player.isSleeping()) {
+                                    violations.put(uuid, 0.0);
+                                    lastSafeLocation.put(uuid, player.getLocation());
+                                    return;
+                                }
+
+                                // Protecție PvP la Knockback / Explosion (Previne Alarmele False)
+                                if (player.getNoDamageTicks() > 10 || Math.hypot(player.getVelocity().getX(), player.getVelocity().getZ()) > 0.05) {
+                                    violations.put(uuid, 0.0);
                                     lastSafeLocation.put(uuid, player.getLocation());
                                     return;
                                 }
@@ -111,12 +131,10 @@ public class Speed implements Listener {
 
                                 double threshold = maxSpeed * SPEED_TOLERANCE_MULTIPLIER;
 
-                                // --- FIX 100% LOGIC PENTRU MEDIUL FIZIC ---
                                 boolean isOnIce = isBlockIce(fromLoc.clone().subtract(0, 0.1, 0).getBlock().getType()) ||
                                         isBlockIce(fromLoc.clone().subtract(0, 1.0, 0).getBlock().getType());
                                 boolean hasLowCeiling = !fromLoc.clone().add(0, 2.0, 0).getBlock().getType().isAir();
 
-                                // Verificăm cu un Bounding Box dacă s-a mișcat PE sau CĂTRE o scară/slab
                                 boolean isOnStairsOrSlabs = isStairOrSlab(fromLoc) || isStairOrSlab(toLoc);
 
                                 if (isOnIce && hasLowCeiling) {
@@ -124,10 +142,8 @@ public class Speed implements Listener {
                                 } else if (isOnIce) {
                                     threshold = THRESHOLD_ICE;
                                 } else if (isOnStairsOrSlabs) {
-                                    // Dacă este pe scări, aplicăm pragul extins chiar dacă n-are gheață
                                     threshold = THRESHOLD_STAIRS_SLABS;
 
-                                    // Adăugăm multiplicatorul de viteză din poțiuni PESTE viteza de scări
                                     if (maxSpeed > MAX_SPEED_BASE) {
                                         threshold *= (maxSpeed / MAX_SPEED_BASE);
                                     }
@@ -142,9 +158,10 @@ public class Speed implements Listener {
                                         flagPlayer.addFlag(player, "Speed", "Sustained high speed (Speed: " + String.format("%.2f", deltaXZ) + " | Max: " + String.format("%.2f", threshold) + ")");
 
                                         Location safe = lastSafeLocation.getOrDefault(uuid, fromLoc);
+                                        teleportGrace.put(uuid, System.currentTimeMillis() + 1000L); // Grație pentru Rubber-Band
                                         player.teleport(safe, PlayerTeleportEvent.TeleportCause.PLUGIN);
 
-                                        violations.put(uuid, 1.0);
+                                        violations.put(uuid, 1.0); // Reset parțial
                                     }
                                 } else {
                                     double vl = violations.getOrDefault(uuid, 0.0);
@@ -161,6 +178,23 @@ public class Speed implements Listener {
                     }
                 }
         );
+    }
+
+    // ========================================================
+    // SINCRONIZAREA IMUNITĂȚII LA TELEPORT / RESPAWN / PAT
+    // ========================================================
+
+    @EventHandler(priority = EventPriority.MONITOR)
+    public void onBedEnter(PlayerBedEnterEvent event) {
+        if (event.isCancelled()) return;
+        UUID uuid = event.getPlayer().getUniqueId();
+        teleportGrace.put(uuid, System.currentTimeMillis());
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR)
+    public void onBedLeave(PlayerBedLeaveEvent event) {
+        UUID uuid = event.getPlayer().getUniqueId();
+        teleportGrace.put(uuid, System.currentTimeMillis());
     }
 
     @EventHandler(priority = EventPriority.MONITOR)
@@ -196,13 +230,13 @@ public class Speed implements Listener {
         teleportGrace.remove(uuid);
     }
 
-    /**
-     * Bounding Box: Scanăm zona sub și în jurul picioarelor pentru blocuri în trepte.
-     */
+    // ========================================================
+    // VERIFICĂRI BLOCURI
+    // ========================================================
+
     private boolean isStairOrSlab(Location loc) {
         int minX = (int) Math.floor(loc.getX() - 0.3);
         int maxX = (int) Math.floor(loc.getX() + 0.3);
-        // Verificăm de la -0.5 (blocul de sub picioare) până la +0.5 (blocul în care stă efectiv)
         int minY = (int) Math.floor(loc.getY() - 0.5);
         int maxY = (int) Math.floor(loc.getY() + 0.5);
         int minZ = (int) Math.floor(loc.getZ() - 0.3);
@@ -214,7 +248,6 @@ public class Speed implements Listener {
                     Material type = loc.getWorld().getBlockAt(bx, by, bz).getType();
                     String name = type.name();
 
-                    // Acoperim toate denumirile posibile din versiuni vechi și noi de Bukkit/Spigot
                     if (name.contains("STAIRS") || name.contains("SLAB") || name.contains("STEP")) {
                         return true;
                     }
@@ -226,6 +259,6 @@ public class Speed implements Listener {
 
     private boolean isBlockIce(Material material) {
         String name = material.name();
-        return name.contains("ICE"); // Acoperă automat ICE, PACKED_ICE, BLUE_ICE, FROSTED_ICE
+        return name.contains("ICE");
     }
 }

@@ -38,11 +38,17 @@ import java.util.concurrent.atomic.AtomicInteger;
 /** Paper 1.21.11 + ProtocolLib 5.5.0-SNAPSHOT. */
 public class Tracers implements Listener {
 
+    // ==========================================
+    // SETĂRI UȘOR DE REGLAT (EASY TO TUNE)
+    // ==========================================
+    private static final int DECOYS_PER_SECOND = 20; // Câte entități false spawnăm per jucător
+    private static final long BATCH_INTERVAL_TICKS = 20L; // Intervalul de reîmprospătare (20 ticks = 1 secundă)
+    private static final double MIN_DECOY_DISTANCE = 15.0D; // Distanța minimă a NPC-ului fals
+    private static final double MAX_DECOY_DISTANCE = 25.0D; // Distanța maximă a NPC-ului fals
+    private static final int MAX_VIEW_COUNT_BEFORE_FLAG = 15; // De câte ori are voie să privească direct spre invizibili
+    // ==========================================
+
     private static final ProtocolManager PROTOCOL = ProtocolLibrary.getProtocolManager();
-    private static final int DECOYS_PER_SECOND = 20;
-    private static final long BATCH_INTERVAL_TICKS = 20L;
-    private static final double MIN_DECOY_DISTANCE = 15.0D;
-    private static final double MAX_DECOY_DISTANCE = 25.0D;
     private static final AtomicInteger NEXT_ENTITY_ID = new AtomicInteger(2_000_000);
     private static final Random RANDOM = new Random();
 
@@ -170,7 +176,7 @@ public class Tracers implements Listener {
 
             int count = viewCounts.getOrDefault(player.getUniqueId(), 0) + 1;
             viewCounts.put(player.getUniqueId(), count);
-            if (count > 15) {
+            if (count > MAX_VIEW_COUNT_BEFORE_FLAG) {
                 flagPlayer.addFlag(player, "Tracers", "Repeatedly looking at invisible entities.");
                 flaggedPlayers.add(player.getUniqueId());
                 removeFakeNpcs(player);
@@ -219,6 +225,7 @@ public class Tracers implements Listener {
         return packet;
     }
 
+    @SuppressWarnings({"deprecation", "removal"})
     private PacketContainer createInvisibleMetadata(FakeNpc npc) {
         PacketContainer packet = PROTOCOL.createPacket(PacketType.Play.Server.ENTITY_METADATA);
         packet.getModifier().writeDefaults();
@@ -226,7 +233,7 @@ public class Tracers implements Listener {
 
         // Entity metadata index 0 is the entity-flags byte. Bit 0x20 = invisible.
         WrappedDataValue flags = new WrappedDataValue(
-                0, WrappedDataWatcher.Registry.get(Byte.class), (byte) 0x20
+                0, WrappedDataWatcher.Registry.get(Byte.class, false), (byte) 0x20
         );
         packet.getDataValueCollectionModifier().write(0, Collections.singletonList(flags));
         return packet;
@@ -283,8 +290,6 @@ public class Tracers implements Listener {
 
     public static void cleanupAllDecoys() {
         // Called by dakotaAC#onDisable before ProtocolLib unregisters this plugin.
-        // Packet-only entities have no Bukkit entity to remove, so every client must
-        // receive explicit destroy and player-info-remove packets.
         for (Map.Entry<UUID, List<FakeNpc>> entry : new HashMap<>(fakeNpcs).entrySet()) {
             Player player = Bukkit.getPlayer(entry.getKey());
             if (player == null || !player.isOnline()) {
