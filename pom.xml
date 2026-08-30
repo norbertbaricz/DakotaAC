@@ -10,7 +10,7 @@
          ========================================================= -->
     <groupId>play.skypixel</groupId>
     <artifactId>DakotaAC</artifactId>
-    <version>0.17</version>
+    <version>0.18</version>
     <packaging>jar</packaging>
 
     <name>DakotaAC</name>
@@ -102,9 +102,6 @@
                 <executions>
                     <execution>
 
-                        <!-- Unique execution ID -->
-                        <id>scp-deploy-to-vps</id>
-
                         <!-- Run after the JAR has been packaged -->
                         <phase>package</phase>
 
@@ -114,34 +111,20 @@
 
                         <configuration>
                             <target>
-
                                 <!-- =================================================
-                                     UPLOAD START
+                                     SURVIVAL SERVER
                                      ================================================= -->
-                                <echo level="info"
-                                      message="Uploading DakotaAC plugin to VPS..."/>
+                                <echo level="info" message="Uploading to Skypixel SMP..."/>
 
-                                <!-- =================================================
-                                     DEVELOPMENT SERVER
-                                     ================================================= -->
-                                <echo level="info"
-                                      message="Uploading DakotaAC to Development..."/>
-
-                                <exec executable="scp"
-                                      failonerror="true">
-
+                                <exec executable="scp" failonerror="true">
                                     <arg value="target/${project.build.finalName}.jar"/>
-
-                                    <arg value="root@100.120.106.101:/home/raul/Development/plugins/"/>
-
+                                    <arg value="root@100.120.106.101:/home/raul/Minecraft/plugins/"/>
                                 </exec>
 
                                 <!-- =================================================
                                      UPLOAD COMPLETE
                                      ================================================= -->
-                                <echo level="info"
-                                      message="DakotaAC plugin uploaded successfully to Development."/>
-
+                                <echo level="info" message="Skypixel plugin uploaded successfully to all VPS servers."/>
                             </target>
                         </configuration>
 

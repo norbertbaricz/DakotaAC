@@ -87,6 +87,7 @@ skypixel\Combat\AutoArmor.class
 skypixel\Render\Tracers$FakeNpc.class
 skypixel\Misc\AntiBot.class
 skypixel\Player\ChestStealer$1.class
+skypixel\Exploit\Plugins$1.class
 skypixel\Misc\Spammer$1.class
 skypixel\Misc\AntiBot$Session.class
 skypixel\Combat\KillAura$ClientAimData.class
@@ -106,3 +107,4 @@ skypixel\Combat\Criticals$1.class
 skypixel\Fun\Derp$1.class
 skypixel\Movement\Jesus.class
 skypixel\Combat\AimBot.class
+skypixel\Exploit\Plugins.class

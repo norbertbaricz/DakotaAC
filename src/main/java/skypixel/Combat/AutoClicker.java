@@ -23,23 +23,27 @@ public class AutoClicker implements Listener {
     // ==========================================
     // SETĂRI UȘOR DE REGLAT (EASY TO TUNE)
     // ==========================================
-    // Limita maximă de click-uri pe secundă (CPS) permisă.
-    // Un om normal face 6-10 CPS. Cei care folosesc Butterfly/Drag click pot atinge 15-20.
-    // Peste 20 este garantat macro sau AutoClicker inuman.
-    private static final int MAX_ALLOWED_CPS = 20;
+    // Limita maximă de click-uri pe secundă (CPS).
+    // Drag Click / Butterfly Click extrem poate atinge 20-24 CPS.
+    // 25 este pragul sigur care desparte tryhard-ul de Macro/AutoClicker.
+    private static final int MAX_ALLOWED_CPS = 25;
 
     // Fereastra de timp în care contorizăm click-urile (1000ms = 1 secundă)
     private static final long TIME_WINDOW_MS = 1000L;
+
+    // Câte secunde de CPS inuman iertăm? (Absoarbe complet lag-ul de rețea / TCP Bursts)
+    private static final int MAX_VIOLATIONS = 3;
     // ==========================================
 
-    // Folosim colecții Thread-Safe pentru istoricul click-urilor
+    // Folosim colecții Thread-Safe pentru istoric
     private final ConcurrentHashMap<UUID, ConcurrentLinkedQueue<Long>> clickHistory = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<UUID, Integer> violationBuffer = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<UUID, Long> lastViolationTime = new ConcurrentHashMap<>();
 
     // Urmărim exact starea de minat a clientului din pachetele de rețea
     private final ConcurrentHashMap<UUID, Boolean> isMining = new ConcurrentHashMap<>();
 
     public AutoClicker() {
-        // Interceptăm ambele pachete: Animația brațului ȘI Interacțiunea cu blocurile
         ProtocolLibrary.getProtocolManager().addPacketListener(
                 new PacketAdapter(dakotaAC.getPlugin(dakotaAC.class),
                         com.comphenix.protocol.events.ListenerPriority.NORMAL,
@@ -64,14 +68,12 @@ public class AutoClicker implements Listener {
                                 EnumWrappers.PlayerDigType digType = event.getPacket().getPlayerDigTypes().readSafely(0);
 
                                 if (digType == EnumWrappers.PlayerDigType.START_DESTROY_BLOCK) {
-                                    // Clientul ne anunță că ține apăsat click pentru a sparge un bloc
                                     isMining.put(uuid, true);
                                 } else if (digType == EnumWrappers.PlayerDigType.STOP_DESTROY_BLOCK ||
                                         digType == EnumWrappers.PlayerDigType.ABORT_DESTROY_BLOCK) {
-                                    // Clientul a terminat de spart blocul sau a renunțat
                                     isMining.put(uuid, false);
                                 }
-                                return; // Ieșim, acest pachet nu este un click ofensiv
+                                return;
                             }
 
                             // ----------------------------------------------------
@@ -79,8 +81,7 @@ public class AutoClicker implements Listener {
                             // ----------------------------------------------------
                             if (type == PacketType.Play.Client.ARM_ANIMATION) {
 
-                                // FIX MAJOR: Dacă știm că jucătorul minează chiar acum, ignorăm animațiile!
-                                // Acest filtru absoarbe toate pachetele trimise natural de joc în timpul minatului.
+                                // Dacă știm că jucătorul minează chiar acum, ignorăm animațiile naturale
                                 if (isMining.getOrDefault(uuid, false)) {
                                     return;
                                 }
@@ -92,23 +93,42 @@ public class AutoClicker implements Listener {
 
                                 history.add(now);
 
-                                // Curățăm istoricul: ștergem click-urile care sunt mai vechi de o secundă (TIME_WINDOW_MS)
+                                // Curățăm istoricul: ștergem click-urile mai vechi de 1 secundă
                                 while (!history.isEmpty() && history.peek() < now - TIME_WINDOW_MS) {
                                     history.poll();
                                 }
 
                                 int currentCPS = history.size();
 
-                                // Verificăm dacă a depășit limita setată de noi
+                                // Dacă a depășit limita admisă (Macro sau Lag extrem)
                                 if (currentCPS > MAX_ALLOWED_CPS) {
-                                    history.clear(); // Îi curățăm buffer-ul ca să nu primească spam de mesaje
 
-                                    // Trimitem flag-ul pe thread-ul principal (Bukkit) ca să fie sigur și curat
-                                    Bukkit.getScheduler().runTask(dakotaAC.getPlugin(dakotaAC.class), () -> {
-                                        if (player.isOnline()) {
-                                            flagPlayer.addFlag(player, "AutoClicker", "Inhuman CPS detected (" + currentCPS + " CPS).");
-                                        }
-                                    });
+                                    int vl = violationBuffer.getOrDefault(uuid, 0) + 1;
+                                    violationBuffer.put(uuid, vl);
+                                    lastViolationTime.put(uuid, now);
+
+                                    // Curățăm coada INSTANT! Asta transformă un Lag Spike uriaș de 60 de click-uri
+                                    // într-o singură penalizare (+1 VL), protejând jucătorul legitim.
+                                    history.clear();
+
+                                    // A menținut un ritm inuman prea mult timp. Este 100% hack.
+                                    if (vl >= MAX_VIOLATIONS) {
+                                        Bukkit.getScheduler().runTask(dakotaAC.getPlugin(dakotaAC.class), () -> {
+                                            if (player.isOnline()) {
+                                                flagPlayer.addFlag(player, "AutoClicker", "Inhuman CPS detected (" + currentCPS + " CPS).");
+                                            }
+                                        });
+
+                                        violationBuffer.put(uuid, MAX_VIOLATIONS - 1); // Resetăm parțial pentru a evita spam-ul
+                                    }
+                                } else {
+                                    // Sistem de "Decay": Dacă joacă normal timp de 3 secunde, îl iertăm de vechile Spike-uri.
+                                    long lastSpike = lastViolationTime.getOrDefault(uuid, 0L);
+                                    if (now - lastSpike > 3000L) {
+                                        int vl = violationBuffer.getOrDefault(uuid, 0);
+                                        if (vl > 0) violationBuffer.put(uuid, vl - 1);
+                                        lastViolationTime.put(uuid, now); // Resetăm timer-ul de decay
+                                    }
                                 }
                             }
 
@@ -122,9 +142,10 @@ public class AutoClicker implements Listener {
 
     @EventHandler
     public void onPlayerQuit(PlayerQuitEvent event) {
-        // Prevenim scurgerile de memorie (Memory Leaks)
         UUID uuid = event.getPlayer().getUniqueId();
         clickHistory.remove(uuid);
         isMining.remove(uuid);
+        violationBuffer.remove(uuid);
+        lastViolationTime.remove(uuid);
     }
 }

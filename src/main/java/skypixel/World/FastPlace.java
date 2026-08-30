@@ -110,7 +110,7 @@ public class FastPlace implements Listener {
             fastPlaceBuffer.put(uuid, vl);
 
             if (vl >= MAX_VIOLATIONS) {
-                flagPlayer.addFlag(player, "FastPlace / Scaffold", "Machine-like block placement (" + delay + "ms delay).");
+                flagPlayer.addFlag(player, "FastPlace", "Machine-like block placement (" + delay + "ms delay).");
 
                 // Anulăm evenimentul nativ. Bukkit va forța clientul să șteargă blocul fantomă.
                 event.setCancelled(true);

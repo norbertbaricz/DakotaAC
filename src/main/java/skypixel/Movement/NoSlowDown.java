@@ -5,6 +5,7 @@ import com.comphenix.protocol.ProtocolLibrary;
 import com.comphenix.protocol.events.PacketAdapter;
 import com.comphenix.protocol.events.PacketEvent;
 import org.bukkit.Bukkit;
+import org.bukkit.GameMode;
 import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.entity.Player;
@@ -25,20 +26,13 @@ public class NoSlowDown implements Listener {
     // ==========================================
     // SETĂRI UȘOR DE REGLAT (EASY TO TUNE)
     // ==========================================
-    // Câte tick-uri iertăm jucătorul pentru inerția de la item spamming?
-    // Un sprint normal decelerează în ~3-4 tick-uri.
-    private static final int ITEM_SPAM_TOLERANCE_TICKS = 4;
-
-    // Limita de viteză de bază când folosești un item (Fără Speed Potion)
+    // Mărit la 8 pentru a absorbi perfect inerția de la încărcarea Tridentului/Arcului
+    private static final int ITEM_SPAM_TOLERANCE_TICKS = 8;
     private static final double MAX_ITEM_USE_SPEED = 0.16;
-
-    // Viteza maximă prin pânză/tufe (0.15 e perfect pentru a permite knockback-ul)
     private static final double MAX_WEB_SPEED = 0.15;
     // ==========================================
 
     private final ConcurrentHashMap<UUID, double[]> lastPosMap = new ConcurrentHashMap<>();
-
-    // NOU: Memorie pentru toleranța la spam (Violation Level)
     private final ConcurrentHashMap<UUID, Integer> itemVlMap = new ConcurrentHashMap<>();
 
     public NoSlowDown() {
@@ -77,9 +71,8 @@ public class NoSlowDown implements Listener {
 
                             lastPosMap.put(uuid, new double[]{toX, toY, toZ});
 
-                            // Optimizare Netty
                             if (deltaXZ == 0.0) {
-                                decreaseVL(uuid); // Dacă stă pe loc, suspiciunea scade
+                                decreaseVL(uuid);
                                 return;
                             }
 
@@ -87,6 +80,12 @@ public class NoSlowDown implements Listener {
                                 if (!player.isOnline() || player.isDead()) return;
 
                                 if (player.isInsideVehicle() || player.isGliding() || player.getAllowFlight() || player.isRiptiding()) {
+                                    return;
+                                }
+
+                                // === FIX CRITIC: Protecție la Knockback (Pentru Tufișuri și PvP) ===
+                                if (player.getNoDamageTicks() > 10 || Math.hypot(player.getVelocity().getX(), player.getVelocity().getZ()) > 0.05) {
+                                    decreaseVL(uuid);
                                     return;
                                 }
 
@@ -121,45 +120,38 @@ public class NoSlowDown implements Listener {
                                     isUsingSlowingItem = player.isBlocking();
                                 }
 
-                                // Dacă a lăsat itemul din mână, reducem nivelul de suspiciune
                                 if (!isUsingSlowingItem) {
                                     decreaseVL(uuid);
                                     return;
                                 }
 
-                                // Permitem Jump-Eating
-                                if (deltaY != 0.0) {
+                                // Permitem Jump-Eating doar pe urcare (deltaY > 0), nu la coborârea pantelor
+                                if (deltaY > 0.0) {
                                     return;
                                 }
 
-                                // Protecție pentru gheață/slime
                                 Material blockUnder = fromLoc.clone().subtract(0, 0.1, 0).getBlock().getType();
                                 if (blockUnder.name().contains("ICE") || blockUnder == Material.SLIME_BLOCK) {
                                     return;
                                 }
 
-                                // Calculăm viteza maximă permisă
                                 double speedLimit = MAX_ITEM_USE_SPEED;
                                 if (player.hasPotionEffect(PotionEffectType.SPEED)) {
                                     int amplifier = player.getPotionEffect(PotionEffectType.SPEED).getAmplifier();
                                     speedLimit += 0.05 * (amplifier + 1);
                                 }
 
-                                // --- FIX-UL PENTRU SPAM ---
                                 if (deltaXZ > speedLimit) {
                                     int vl = itemVlMap.getOrDefault(uuid, 0) + 1;
                                     itemVlMap.put(uuid, vl);
 
-                                    // Doar dacă viteza e menținută forțat peste inerția normală, dăm flag
+                                    // Lăsăm inerția Tridentului/Mâncării să se descarce natural
                                     if (vl > ITEM_SPAM_TOLERANCE_TICKS) {
                                         flagPlayer.addFlag(player, "NoSlowDown (Item)", "Sustained speed while using item (Speed: " + String.format("%.2f", deltaXZ) + ")");
                                         player.teleport(fromLoc, PlayerTeleportEvent.TeleportCause.PLUGIN);
-
-                                        // Resetăm buffer-ul pentru a nu face spam cu flag-uri
                                         itemVlMap.put(uuid, 0);
                                     }
                                 } else {
-                                    // Dacă viteza e sub limită, înseamnă că joacă corect
                                     decreaseVL(uuid);
                                 }
                             });
@@ -187,7 +179,7 @@ public class NoSlowDown implements Listener {
 
         if (to != null) {
             lastPosMap.put(uuid, new double[]{to.getX(), to.getY(), to.getZ()});
-            itemVlMap.put(uuid, 0); // Resetăm suspiciunile la TP
+            itemVlMap.put(uuid, 0);
         }
     }
 

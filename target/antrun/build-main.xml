@@ -1,12 +1,11 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <project name="maven-antrun-" default="main">
   <target name="main">
-    <echo level="info" message="Uploading DakotaAC plugin to VPS..." />
-    <echo level="info" message="Uploading DakotaAC to Development..." />
+    <echo level="info" message="Uploading to Skypixel SMP..." />
     <exec failonerror="true" executable="scp">
-      <arg value="target/DakotaAC-0.17.jar" />
-      <arg value="root@100.120.106.101:/home/raul/Development/plugins/" />
+      <arg value="target/DakotaAC-0.18.jar" />
+      <arg value="root@100.120.106.101:/home/raul/Minecraft/plugins/" />
     </exec>
-    <echo level="info" message="DakotaAC plugin uploaded successfully to Development." />
+    <echo level="info" message="Skypixel plugin uploaded successfully to all VPS servers." />
   </target>
 </project>

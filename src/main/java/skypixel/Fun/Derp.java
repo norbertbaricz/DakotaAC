@@ -111,7 +111,7 @@ public class Derp implements Listener {
 
                                         Bukkit.getScheduler().runTask(dakotaAC.getPlugin(dakotaAC.class), () -> {
                                             if (player.isOnline()) {
-                                                flagPlayer.addFlag(player, "Derp/SpinBot", "Erratic and unnatural head rotations.");
+                                                flagPlayer.addFlag(player, "Derp", "Erratic and unnatural head rotations.");
                                             }
                                         });
 

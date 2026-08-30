@@ -73,7 +73,7 @@ public class Version implements Listener, PluginMessageListener {
             if (brand.contains(loader)) {
                 Bukkit.getScheduler().runTask(dakotaAC.getPlugin(dakotaAC.class), () -> {
                     if (player.isOnline()) {
-                        flagPlayer.addFlag(player, "Client (Modded)", "Playing on a modloader (" + brand + "). Possible illegal mods.");
+                        flagPlayer.addFlag(player, "Version (Modded)", "Playing on a modloader (" + brand + "). Possible illegal mods.");
                     }
                 });
                 return;
@@ -83,7 +83,7 @@ public class Version implements Listener, PluginMessageListener {
         // 3. Dacă nu e nici în Lista Albă, nici în Lista Gri, intră în Lista Neagră (Suspect)
         Bukkit.getScheduler().runTask(dakotaAC.getPlugin(dakotaAC.class), () -> {
             if (player.isOnline()) {
-                flagPlayer.addFlag(player, "Client (Suspicious)", "Unknown or unapproved client detected: " + brand);
+                flagPlayer.addFlag(player, "Version (Suspicious)", "Unknown or unapproved client detected: " + brand);
             }
         });
     }

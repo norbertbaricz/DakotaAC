@@ -5,14 +5,13 @@ import com.comphenix.protocol.ProtocolLibrary;
 import com.comphenix.protocol.events.PacketAdapter;
 import com.comphenix.protocol.events.PacketEvent;
 import org.bukkit.Bukkit;
+import org.bukkit.GameMode;
 import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
-import org.bukkit.event.player.PlayerBedEnterEvent;
-import org.bukkit.event.player.PlayerBedLeaveEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.event.player.PlayerRespawnEvent;
 import org.bukkit.event.player.PlayerTeleportEvent;
@@ -27,20 +26,18 @@ import java.util.concurrent.ConcurrentHashMap;
 public class Speed implements Listener {
 
     // ==========================================
-    // SETĂRI UȘOR DE REGLAT (EASY TO TUNE)
+    // SETĂRI BUFFER (FĂRĂ FIZICĂ INSTABILĂ)
     // ==========================================
-    private static final double MAX_SPEED_BASE = 0.28; // Viteza Vanilla la sprint
-    private static final double SPEED_TOLERANCE_MULTIPLIER = 1.15; // Marja de eroare generală
+    private static final double BASE_SPEED_LIMIT = 0.36; // Acoperă un sprint-jump perfect
+    private static final double MAX_BUFFER = 1.5; // Limita până la care iertăm impulsul
+    private static final double BUFFER_DECAY = 0.05; // Cât de repede se șterge suspiciunea
 
-    private static final double THRESHOLD_STAIRS_SLABS = 0.62; // Viteza admisă pe scări / slab-uri
-    private static final double THRESHOLD_ICE = 0.65; // Viteza admisă când aluneci pe gheață
-    private static final double THRESHOLD_ICE_CEILING = 1.30; // Viteza "Headhitter" (Gheață + Tavan)
-
-    // Limita fizică a lumii pentru a preveni crash-urile matematice
-    private static final double MAX_WORLD_COORDINATE = 3.0E7;
+    private static final double ICE_MULTIPLIER = 1.8;
+    private static final double SLAB_MULTIPLIER = 1.3;
+    private static final double HEADHITTER_MULTIPLIER = 1.5;
     // ==========================================
 
-    private final ConcurrentHashMap<UUID, Double> violations = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<UUID, Double> speedBuffer = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<UUID, double[]> lastPosMap = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<UUID, Location> lastSafeLocation = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<UUID, Long> teleportGrace = new ConcurrentHashMap<>();
@@ -65,10 +62,7 @@ public class Speed implements Listener {
                             double toY = event.getPacket().getDoubles().readSafely(1);
                             double toZ = event.getPacket().getDoubles().readSafely(2);
 
-                            // === PROTECȚIE CRASH EXPLOITS ===
-                            if (Double.isNaN(toX) || Double.isNaN(toY) || Double.isNaN(toZ) ||
-                                    Double.isInfinite(toX) || Double.isInfinite(toY) || Double.isInfinite(toZ) ||
-                                    Math.abs(toX) > MAX_WORLD_COORDINATE || Math.abs(toZ) > MAX_WORLD_COORDINATE) {
+                            if (Double.isNaN(toX) || Double.isNaN(toZ) || Math.abs(toX) > 3.0E7 || Math.abs(toZ) > 3.0E7) {
                                 event.setCancelled(true);
                                 return;
                             }
@@ -82,94 +76,95 @@ public class Speed implements Listener {
 
                             double deltaX = toX - fromPos[0];
                             double deltaZ = toZ - fromPos[2];
-                            double deltaXZ = Math.hypot(deltaX, deltaZ);
+                            final double deltaXZ = Math.hypot(deltaX, deltaZ);
 
-                            // Ghost Packet / Extreme Desync limit
-                            if (deltaXZ > 10.0) return;
+                            // Blink-ul gestionează teleportările, noi doar ignorăm
+                            if (deltaXZ > 10.0 || deltaXZ == 0.0) {
+                                lastPosMap.put(uuid, new double[]{toX, toY, toZ});
+                                return;
+                            }
 
                             final double[] safeFromPos = {fromPos[0], fromPos[1], fromPos[2]};
                             lastPosMap.put(uuid, new double[]{toX, toY, toZ});
 
-                            // Optimizare Netty
-                            if (deltaXZ == 0.0) return;
-
                             Bukkit.getScheduler().runTask(dakotaAC.getPlugin(dakotaAC.class), () -> {
                                 if (!player.isOnline() || player.isDead()) return;
 
-                                // Perioadă de grație teleport / respawn / bed
-                                long lastTeleport = teleportGrace.getOrDefault(uuid, 0L);
-                                if (System.currentTimeMillis() - lastTeleport < 1000) {
-                                    violations.put(uuid, 0.0);
-                                    lastSafeLocation.put(uuid, new Location(player.getWorld(), toX, toY, toZ, player.getLocation().getYaw(), player.getLocation().getPitch()));
-                                    return;
-                                }
-
-                                // Excepții Vanilla (Am adăugat verificarea pentru pat)
-                                if (player.getAllowFlight() || player.isInsideVehicle() || player.isSwimming() || player.isGliding() || player.isSleeping()) {
-                                    violations.put(uuid, 0.0);
+                                // Imunitate teleport
+                                if (teleportGrace.containsKey(uuid) && teleportGrace.get(uuid) > System.currentTimeMillis()) {
+                                    speedBuffer.put(uuid, 0.0);
                                     lastSafeLocation.put(uuid, player.getLocation());
                                     return;
                                 }
 
-                                // Protecție PvP la Knockback / Explosion (Previne Alarmele False)
+                                // Imunitate zbor/vehicul
+                                if (player.isFlying() || player.getGameMode() == GameMode.CREATIVE || player.getGameMode() == GameMode.SPECTATOR ||
+                                        player.isInsideVehicle() || player.isSwimming() || player.isGliding() || player.isSleeping()) {
+                                    speedBuffer.put(uuid, 0.0);
+                                    lastSafeLocation.put(uuid, player.getLocation());
+                                    return;
+                                }
+
+                                // Imunitate PvP (Knockback)
                                 if (player.getNoDamageTicks() > 10 || Math.hypot(player.getVelocity().getX(), player.getVelocity().getZ()) > 0.05) {
-                                    violations.put(uuid, 0.0);
+                                    speedBuffer.put(uuid, 0.0);
                                     lastSafeLocation.put(uuid, player.getLocation());
                                     return;
                                 }
 
-                                Location fromLoc = new Location(player.getWorld(), safeFromPos[0], safeFromPos[1], safeFromPos[2], player.getLocation().getYaw(), player.getLocation().getPitch());
+                                Location fromLoc = new Location(player.getWorld(), safeFromPos[0], safeFromPos[1], safeFromPos[2]);
                                 Location toLoc = new Location(player.getWorld(), toX, toY, toZ);
 
-                                // Multiplicatori efecte
-                                double maxSpeed = MAX_SPEED_BASE;
+                                double speedLimit = BASE_SPEED_LIMIT;
+
+                                // Poțiuni
                                 for (PotionEffect effect : player.getActivePotionEffects()) {
                                     if (effect.getType().equals(PotionEffectType.SPEED)) {
-                                        maxSpeed *= (1.0 + (0.2 * (effect.getAmplifier() + 1)));
+                                        speedLimit += (0.06 * (effect.getAmplifier() + 1));
                                     }
                                 }
 
-                                double threshold = maxSpeed * SPEED_TOLERANCE_MULTIPLIER;
-
-                                boolean isOnIce = isBlockIce(fromLoc.clone().subtract(0, 0.1, 0).getBlock().getType()) ||
+                                // Mediu
+                                boolean onIce = isBlockIce(fromLoc.clone().subtract(0, 0.1, 0).getBlock().getType()) ||
                                         isBlockIce(fromLoc.clone().subtract(0, 1.0, 0).getBlock().getType());
-                                boolean hasLowCeiling = !fromLoc.clone().add(0, 2.0, 0).getBlock().getType().isAir();
+                                boolean underBlock = !fromLoc.clone().add(0, 2.0, 0).getBlock().getType().isAir();
+                                boolean onStairs = isStairOrSlab(fromLoc) || isStairOrSlab(toLoc);
 
-                                boolean isOnStairsOrSlabs = isStairOrSlab(fromLoc) || isStairOrSlab(toLoc);
-
-                                if (isOnIce && hasLowCeiling) {
-                                    threshold = THRESHOLD_ICE_CEILING;
-                                } else if (isOnIce) {
-                                    threshold = THRESHOLD_ICE;
-                                } else if (isOnStairsOrSlabs) {
-                                    threshold = THRESHOLD_STAIRS_SLABS;
-
-                                    if (maxSpeed > MAX_SPEED_BASE) {
-                                        threshold *= (maxSpeed / MAX_SPEED_BASE);
-                                    }
+                                if (onIce) {
+                                    speedLimit *= ICE_MULTIPLIER;
+                                } else if (onStairs) {
+                                    speedLimit *= SLAB_MULTIPLIER;
+                                } else if (underBlock) {
+                                    speedLimit *= HEADHITTER_MULTIPLIER;
                                 }
 
-                                // --- LOGICA DE BAZĂ ---
-                                if (deltaXZ > threshold) {
-                                    double vl = violations.getOrDefault(uuid, 0.0) + (deltaXZ - threshold);
-                                    violations.put(uuid, vl);
+                                double buffer = speedBuffer.getOrDefault(uuid, 0.0);
 
-                                    if (vl > 2.0) {
-                                        flagPlayer.addFlag(player, "Speed", "Sustained high speed (Speed: " + String.format("%.2f", deltaXZ) + " | Max: " + String.format("%.2f", threshold) + ")");
+                                // LOGICA DE BUFFER: Nu dăm flag instant, adunăm excesul.
+                                if (deltaXZ > speedLimit) {
+                                    buffer += (deltaXZ - speedLimit);
 
-                                        Location safe = lastSafeLocation.getOrDefault(uuid, fromLoc);
-                                        teleportGrace.put(uuid, System.currentTimeMillis() + 1000L); // Grație pentru Rubber-Band
-                                        player.teleport(safe, PlayerTeleportEvent.TeleportCause.PLUGIN);
+                                    // Doar dacă e ceva complet inuman dăm flag instant
+                                    if (deltaXZ > speedLimit * 2.5) {
+                                        flagPlayer.addFlag(player, "Speed (Instant)", "Absurd momentum (" + String.format("%.2f", deltaXZ) + ")");
+                                        player.teleport(lastSafeLocation.getOrDefault(uuid, fromLoc), PlayerTeleportEvent.TeleportCause.PLUGIN);
+                                        speedBuffer.put(uuid, 0.0);
+                                        return;
+                                    }
 
-                                        violations.put(uuid, 1.0); // Reset parțial
+                                    // Dacă s-a acumulat prea mult exces (BHOP continuu)
+                                    if (buffer > MAX_BUFFER) {
+                                        flagPlayer.addFlag(player, "Speed (Strafe/Bhop)", "Sustained unnatural speed (Buffer: " + String.format("%.2f", buffer) + ")");
+                                        player.teleport(lastSafeLocation.getOrDefault(uuid, fromLoc), PlayerTeleportEvent.TeleportCause.PLUGIN);
+                                        buffer = 0.5; // Resetăm parțial pentru a nu spama
                                     }
                                 } else {
-                                    double vl = violations.getOrDefault(uuid, 0.0);
-                                    if (vl > 0) {
-                                        violations.put(uuid, Math.max(0, vl - 0.1));
-                                    }
-                                    lastSafeLocation.put(uuid, new Location(player.getWorld(), toX, toY, toZ, player.getLocation().getYaw(), player.getLocation().getPitch()));
+                                    // Dacă viteza e legală, scurtăm buffer-ul (iertăm)
+                                    buffer = Math.max(0.0, buffer - BUFFER_DECAY);
+                                    lastSafeLocation.put(uuid, toLoc); // Salvăm locația de siguranță DOAR când e curat
                                 }
+
+                                speedBuffer.put(uuid, buffer);
                             });
 
                         } catch (Exception ex) {
@@ -180,59 +175,34 @@ public class Speed implements Listener {
         );
     }
 
-    // ========================================================
-    // SINCRONIZAREA IMUNITĂȚII LA TELEPORT / RESPAWN / PAT
-    // ========================================================
-
-    @EventHandler(priority = EventPriority.MONITOR)
-    public void onBedEnter(PlayerBedEnterEvent event) {
-        if (event.isCancelled()) return;
-        UUID uuid = event.getPlayer().getUniqueId();
-        teleportGrace.put(uuid, System.currentTimeMillis());
-    }
-
-    @EventHandler(priority = EventPriority.MONITOR)
-    public void onBedLeave(PlayerBedLeaveEvent event) {
-        UUID uuid = event.getPlayer().getUniqueId();
-        teleportGrace.put(uuid, System.currentTimeMillis());
-    }
-
     @EventHandler(priority = EventPriority.MONITOR)
     public void onPlayerTeleport(PlayerTeleportEvent event) {
         if (event.isCancelled()) return;
         UUID uuid = event.getPlayer().getUniqueId();
-        Location to = event.getTo();
-
-        if (to != null) {
-            teleportGrace.put(uuid, System.currentTimeMillis());
-            lastSafeLocation.put(uuid, to);
-            lastPosMap.put(uuid, new double[]{to.getX(), to.getY(), to.getZ()});
+        if (event.getTo() != null) {
+            teleportGrace.put(uuid, System.currentTimeMillis() + 1000L);
+            lastSafeLocation.put(uuid, event.getTo());
+            lastPosMap.remove(uuid);
         }
     }
 
     @EventHandler(priority = EventPriority.MONITOR)
     public void onPlayerRespawn(PlayerRespawnEvent event) {
         UUID uuid = event.getPlayer().getUniqueId();
-        Location to = event.getRespawnLocation();
-
-        teleportGrace.put(uuid, System.currentTimeMillis());
-        lastSafeLocation.put(uuid, to);
-        lastPosMap.put(uuid, new double[]{to.getX(), to.getY(), to.getZ()});
-        violations.remove(uuid);
+        teleportGrace.put(uuid, System.currentTimeMillis() + 1000L);
+        lastSafeLocation.put(uuid, event.getRespawnLocation());
+        lastPosMap.remove(uuid);
+        speedBuffer.remove(uuid);
     }
 
     @EventHandler
     public void onPlayerQuit(PlayerQuitEvent event) {
         UUID uuid = event.getPlayer().getUniqueId();
-        violations.remove(uuid);
+        speedBuffer.remove(uuid);
         lastPosMap.remove(uuid);
         lastSafeLocation.remove(uuid);
         teleportGrace.remove(uuid);
     }
-
-    // ========================================================
-    // VERIFICĂRI BLOCURI
-    // ========================================================
 
     private boolean isStairOrSlab(Location loc) {
         int minX = (int) Math.floor(loc.getX() - 0.3);
@@ -258,7 +228,6 @@ public class Speed implements Listener {
     }
 
     private boolean isBlockIce(Material material) {
-        String name = material.name();
-        return name.contains("ICE");
+        return material.name().contains("ICE");
     }
 }

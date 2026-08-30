@@ -21,13 +21,13 @@ Settings:
   Auto-Kick: true
 
   # Should the system automatically ban a player if they reach the max ban flags?
-  Auto-Ban: false
+  Auto-Ban: true
 
   # How many violations (flags) a player must accumulate to trigger an automatic kick.
-  Max-Kick-Flags: 1500
+  Max-Kick-Flags: 800
 
   # How many violations (flags) a player must accumulate to trigger an automatic ban.
-  Max-Ban-Flags: 3000
+  Max-Ban-Flags: 2000
 
 # ==========================================================
 # MODULES CONFIGURATION
@@ -62,9 +62,13 @@ Modules:
     enabled: true
   PingSpoof:
     enabled: true
+  Plugins:
+    enabled: true
   ServerCrasher:
     enabled: true
-  Teleport:
+  Blink:
+    enabled: true
+  Regen:            
     enabled: true
 
   # --- Fun & Misc Checks ---
@@ -82,7 +86,7 @@ Modules:
     enabled: true
   InventoryMove:
     enabled: true
-  LiquidWalk:
+  Jesus:
     enabled: true
   NoFall:
     enabled: true
@@ -105,6 +109,10 @@ Modules:
   FastUse:
     enabled: true
   InventoryCleaner:
+    enabled: true
+  Version:          
+    enabled: true
+  AntiVPN:         
     enabled: true
 
   # --- Render Checks ---

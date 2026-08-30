@@ -122,7 +122,7 @@ public class Spammer implements Listener {
                 final String finalReason = flagReason;
                 Bukkit.getScheduler().runTask(dakotaAC.getPlugin(dakotaAC.class), () -> {
                     if (player.isOnline()) {
-                        flagPlayer.addFlag(player, "Spammer / ChatBot", finalReason);
+                        flagPlayer.addFlag(player, "Spammer", finalReason);
                     }
                 });
 

@@ -143,7 +143,7 @@ public class HighJump implements Listener {
 
                                 // === LOGICA DE BAZĂ ===
                                 if (deltaY > maxJumpVelocity) {
-                                    flagPlayer.addFlag(player, "HighJump / Fly", "Impossible jump velocity (Y-Speed: " + String.format("%.3f", deltaY) + " | Max: " + String.format("%.3f", maxJumpVelocity) + ")");
+                                    flagPlayer.addFlag(player, "HighJump", "Impossible jump velocity (Y-Speed: " + String.format("%.3f", deltaY) + " | Max: " + String.format("%.3f", maxJumpVelocity) + ")");
 
                                     Location safe = lastSafeLocation.getOrDefault(uuid, player.getLocation());
 

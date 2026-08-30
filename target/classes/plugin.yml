@@ -1,5 +1,5 @@
 name: DakotaAC
-version: '0.17'
+version: '0.18'
 main: skypixel.dakotaAC
 description: Advanced, high-performance anti-cheat for modern Paper servers.
 api-version: '1.21'

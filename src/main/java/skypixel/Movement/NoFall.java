@@ -25,24 +25,20 @@ import java.util.concurrent.ConcurrentHashMap;
 
 public class NoFall implements Listener {
 
-    // ==========================================
-    // SETĂRI UȘOR DE REGLAT (EASY TO TUNE)
-    // Modifică aceste valori direct din cod fără să strici logica principală.
-    // ==========================================
-    private static final double MIN_FALL_DIST_TO_CHECK = 2.5; // De la ce distanță de cădere începem să flag-uim jucătorul
-    private static final double DESYNC_TOLERANCE_NORMAL = 1.5; // Diferența maximă permisă client vs server pentru jucători standard
-    private static final double DESYNC_TOLERANCE_JUMP_BOOST = 4.0; // Toleranță mărită pentru Jump Boost (serverul calculează fall distance diferit cu acest efect)
-    private static final double UPWARD_VELOCITY_RESET_NORMAL = 0.4; // O săritură normală generează deltaY ~0.42
-    private static final double UPWARD_VELOCITY_RESET_JUMP_BOOST = 0.2; // Pentru Jump Boost, suntem mai permisivi pe urcare
+    private static final double MIN_FALL_DIST_TO_CHECK = 2.5;
+    private static final double UPWARD_VELOCITY_RESET_NORMAL = 0.4;
+    private static final double UPWARD_VELOCITY_RESET_JUMP_BOOST = 0.2;
 
     private static final long TELEPORT_IMMUNITY_MS = 1500L;
     private static final long RESPAWN_IMMUNITY_MS = 2000L;
     private static final long DEATH_IMMUNITY_MS = 3000L;
-    // ==========================================
 
     private final ConcurrentHashMap<UUID, double[]> lastPosMap = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<UUID, Double> realFallDistanceMap = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<UUID, Long> teleportImmunity = new ConcurrentHashMap<>();
+
+    // Păstrăm buffer-ul exclusiv pentru desync-ul natural la impactul cu solul
+    private final ConcurrentHashMap<UUID, Double> pendingNoGroundDamage = new ConcurrentHashMap<>();
 
     public NoFall() {
         ProtocolLibrary.getProtocolManager().addPacketListener(
@@ -72,10 +68,10 @@ public class NoFall implements Listener {
                                 return;
                             }
 
-                            // 1. Verificare Imunitate (Blink / Moarte / Respawn)
                             if (teleportImmunity.containsKey(uuid) && teleportImmunity.get(uuid) > System.currentTimeMillis()) {
                                 lastPosMap.put(uuid, new double[]{toX, toY, toZ});
                                 realFallDistanceMap.put(uuid, 0.0);
+                                pendingNoGroundDamage.remove(uuid);
                                 return;
                             }
 
@@ -85,79 +81,72 @@ public class NoFall implements Listener {
                             Bukkit.getScheduler().runTask(dakotaAC.getPlugin(dakotaAC.class), () -> {
                                 if (!player.isOnline() || player.isDead()) return;
 
-                                // 2. Ignorăm modurile de joc și zborul legitim
                                 if (player.getGameMode() == GameMode.CREATIVE || player.getGameMode() == GameMode.SPECTATOR ||
                                         player.getAllowFlight() || player.isGliding() || player.isInsideVehicle() || player.isSwimming()) {
                                     realFallDistanceMap.put(uuid, 0.0);
+                                    pendingNoGroundDamage.remove(uuid);
                                     return;
                                 }
 
-                                // 3. VERIFICĂRI SUPREME PENTRU EFECTE VANILLA / NBT
-                                // Jucătorii cu aceste mecanici nu respectă legile gravitației standard.
                                 if (player.hasPotionEffect(PotionEffectType.SLOW_FALLING) ||
                                         player.hasPotionEffect(PotionEffectType.LEVITATION)) {
                                     realFallDistanceMap.put(uuid, 0.0);
+                                    pendingNoGroundDamage.remove(uuid);
                                     return;
                                 }
 
                                 Location toLoc = new Location(player.getWorld(), toX, toY, toZ);
                                 boolean isPhysicallyOnGround = isNearGround(toLoc);
 
-                                // Dacă cade în ceva moale, serverul iartă fall damage-ul, deci îl iertăm și noi.
                                 if (isSafeLandingBlock(toLoc)) {
                                     realFallDistanceMap.put(uuid, 0.0);
+                                    pendingNoGroundDamage.remove(uuid);
                                     return;
                                 }
 
                                 double realFallDist = realFallDistanceMap.getOrDefault(uuid, 0.0);
                                 boolean hasJumpBoost = player.hasPotionEffect(PotionEffectType.JUMP_BOOST);
 
-                                // 4. Matematica căderii
                                 if (deltaY < 0.0) {
                                     realFallDist += Math.abs(deltaY);
                                 } else if (deltaY > 0.0 && !isPhysicallyOnGround) {
-                                    // Setăm un prag de resetare dinamic bazat pe Jump Boost
                                     double resetThreshold = hasJumpBoost ? UPWARD_VELOCITY_RESET_JUMP_BOOST : UPWARD_VELOCITY_RESET_NORMAL;
-
                                     if (deltaY > resetThreshold) {
                                         realFallDist = 0.0;
                                     }
                                 }
 
                                 // === 5. LOGICA SUPREMĂ DE DETECȚIE ===
-
                                 if (!isPhysicallyOnGround) {
-                                    // SUNTEM ÎN AER.
+                                    // SUNTEM ÎN AER
                                     if (realFallDist > MIN_FALL_DIST_TO_CHECK) {
-
-                                        // Folosim o toleranță mai mare dacă jucătorul are efect NBT care decalează fizica
-                                        double currentTolerance = hasJumpBoost ? DESYNC_TOLERANCE_JUMP_BOOST : DESYNC_TOLERANCE_NORMAL;
-
-                                        // Modul "Packet" / "Hypixel"
-                                        if (player.getFallDistance() < (realFallDist - currentTolerance)) {
-                                            flagPlayer.addFlag(player, "NoFall (Packet)", "Server distance reset mid-air (RealFall: " + String.format("%.2f", realFallDist) + " | Server: " + String.format("%.2f", player.getFallDistance()) + ")");
-                                            player.setFallDistance((float) realFallDist);
-                                        }
-
-                                        // Modul "SpoofGround" / "Vulcan"
                                         if (clientOnGround) {
+                                            // FLAG INSTANT: Clientul Vanilla nu trimite niciodată onGround=true la >1.5 blocuri altitudine!
                                             flagPlayer.addFlag(player, "NoFall (Spoof)", "Spoofed onGround mid-air (RealFall: " + String.format("%.2f", realFallDist) + ")");
                                             player.setFallDistance((float) realFallDist);
                                         }
                                     }
+                                    pendingNoGroundDamage.remove(uuid);
                                 } else {
-                                    // AM ATERIZAT PE PĂMÂNT.
+                                    // AM ATERIZAT PE PĂMÂNT (server-side)
                                     if (realFallDist >= 3.0) {
-
-                                        // Modul "NoGround" / "BlocksMC"
                                         if (!clientOnGround) {
-                                            flagPlayer.addFlag(player, "NoFall (NoGround)", "Landed but denied onGround (RealFall: " + String.format("%.2f", realFallDist) + ")");
-                                            forceFallDamage(player, realFallDist);
+                                            // BUFFER 1-TICK: Așteptăm un tick pentru a compensa lag-ul natural la impact
+                                            Double pending = pendingNoGroundDamage.remove(uuid);
+                                            if (pending != null) {
+                                                flagPlayer.addFlag(player, "NoFall (NoGround)", "Landed but denied onGround (RealFall: " + String.format("%.2f", pending) + ")");
+                                                forceFallDamage(player, pending);
+                                            } else {
+                                                // Înghețăm resetarea distanței! Salvăm și așteptăm tick-ul următor.
+                                                pendingNoGroundDamage.put(uuid, realFallDist);
+                                                realFallDistanceMap.put(uuid, realFallDist);
+                                                return;
+                                            }
                                         }
                                     }
-
-                                    // A atins pământul, resetăm distanța pentru viitor.
+                                    // Dacă e curat sau a fost deja pedepsit, resetăm
                                     realFallDist = 0.0;
+                                    pendingNoGroundDamage.remove(uuid);
                                 }
 
                                 realFallDistanceMap.put(uuid, realFallDist);
@@ -189,6 +178,7 @@ public class NoFall implements Listener {
             lastPosMap.put(uuid, new double[]{to.getX(), to.getY(), to.getZ()});
             realFallDistanceMap.put(uuid, 0.0);
             teleportImmunity.put(uuid, System.currentTimeMillis() + TELEPORT_IMMUNITY_MS);
+            pendingNoGroundDamage.remove(uuid);
         }
     }
 
@@ -197,6 +187,7 @@ public class NoFall implements Listener {
         UUID uuid = event.getEntity().getUniqueId();
         realFallDistanceMap.put(uuid, 0.0);
         teleportImmunity.put(uuid, System.currentTimeMillis() + DEATH_IMMUNITY_MS);
+        pendingNoGroundDamage.remove(uuid);
     }
 
     @EventHandler(priority = EventPriority.MONITOR)
@@ -207,6 +198,7 @@ public class NoFall implements Listener {
         lastPosMap.put(uuid, new double[]{to.getX(), to.getY(), to.getZ()});
         realFallDistanceMap.put(uuid, 0.0);
         teleportImmunity.put(uuid, System.currentTimeMillis() + RESPAWN_IMMUNITY_MS);
+        pendingNoGroundDamage.remove(uuid);
     }
 
     @EventHandler
@@ -215,15 +207,18 @@ public class NoFall implements Listener {
         lastPosMap.remove(uuid);
         realFallDistanceMap.remove(uuid);
         teleportImmunity.remove(uuid);
+        pendingNoGroundDamage.remove(uuid);
     }
 
     private boolean isNearGround(Location loc) {
         int minX = (int) Math.floor(loc.getX() - 0.3);
         int maxX = (int) Math.floor(loc.getX() + 0.3);
-        int minY = (int) Math.floor(loc.getY() - 0.5);
+        int minY = (int) Math.floor(loc.getY() - 1.5);
         int maxY = (int) Math.floor(loc.getY() + 0.5);
         int minZ = (int) Math.floor(loc.getZ() - 0.3);
         int maxZ = (int) Math.floor(loc.getZ() + 0.3);
+
+        double feetThreshold = Math.floor(loc.getY() - 0.6);
 
         for (int bx = minX; bx <= maxX; bx++) {
             for (int by = minY; by <= maxY; by++) {
@@ -231,8 +226,18 @@ public class NoFall implements Listener {
                     Material type = loc.getWorld().getBlockAt(bx, by, bz).getType();
                     if (type.isAir()) continue;
 
-                    if (type.isSolid() || type.name().contains("SNOW") || type.name().contains("CARPET") || type.name().contains("LILY")) {
+                    String name = type.name();
+
+                    // Gardurile și Zidurile au hitbox nativ înalt, le validăm pe toată adâncimea (Y-1.5)
+                    if (name.contains("FENCE") || name.contains("WALL")) {
                         return true;
+                    }
+
+                    // Blocurile normale sunt valide doar dacă sunt chiar sub picioare (Y-0.6)
+                    if (by >= feetThreshold) {
+                        if (type.isSolid() || name.contains("SNOW") || name.contains("CARPET") || name.contains("LILY")) {
+                            return true;
+                        }
                     }
                 }
             }
@@ -254,7 +259,6 @@ public class NoFall implements Listener {
                     Material type = loc.getWorld().getBlockAt(bx, by, bz).getType();
                     String name = type.name();
 
-                    // Am adăugat blocuri noi introduse în versiunile recente (Powder Snow, Kelp, Weeping/Twisting vines)
                     if (name.contains("WATER") || name.contains("LAVA") ||
                             name.contains("COBWEB") || name.contains("SLIME") ||
                             name.contains("HONEY") || name.contains("BED") ||

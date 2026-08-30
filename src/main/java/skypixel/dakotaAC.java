@@ -154,6 +154,7 @@ public final class dakotaAC extends JavaPlugin {
         loadModuleState("GodMode");
         loadModuleState("Phase");
         loadModuleState("PingSpoof");
+        loadModuleState("Plugins");
         loadModuleState("ServerCrasher");
         loadModuleState("Blink");
         loadModuleState("Regen");
@@ -207,6 +208,7 @@ public final class dakotaAC extends JavaPlugin {
         pm.registerEvents(new GodMode(), this);
         pm.registerEvents(new Phase(), this);
         pm.registerEvents(new PingSpoof(), this);
+        pm.registerEvents(new Plugins(), this);
         pm.registerEvents(new ServerCrasher(), this);
         pm.registerEvents(new Blink(), this);
         pm.registerEvents(new Regen(), this);

@@ -26,13 +26,13 @@ public class Fly implements Listener {
     // ==========================================
     // SETĂRI UȘOR DE REGLAT (EASY TO TUNE)
     // ==========================================
-    // Cât permitem unui jucător să plutească pe loc în aer (deltaY = 0)? Foarte restrictiv!
+    // Cât permitem unui jucător să plutească pe loc în aer (deltaY = 0)?
     private final int MAX_HOVER_TICKS = 3;
 
     // Cât permitem să urce continuu (deltaY > 0) dintr-o săritură normală?
     private final int MAX_ASCENSION_TICKS = 12;
 
-    // Câte milisecunde permitem ascensiune liberă (sărituri masive) după ce atinge un Slime / Pat?
+    // Câte milisecunde permitem ascensiune liberă după ce atinge un Slime / Pat?
     private final long BOUNCE_IMMUNITY_MS = 2500L;
     // ==========================================
 
@@ -118,7 +118,6 @@ public class Fly implements Listener {
                                     int hoverTicks = hoverTicksMap.getOrDefault(uuid, 0) + 1;
                                     hoverTicksMap.put(uuid, hoverTicks);
 
-                                    // Imunitatea de bounce NU te lasă să plutești! Te lasă doar să urci.
                                     if (hoverTicks > MAX_HOVER_TICKS) {
                                         flagAndRubberband(player, uuid, "Fly (Hover)", "Suspended in air for " + hoverTicks + " ticks", toLoc);
                                     }
@@ -128,7 +127,6 @@ public class Fly implements Listener {
                                     int ascendTicks = ascendTicksMap.getOrDefault(uuid, 0) + 1;
                                     ascendTicksMap.put(uuid, ascendTicks);
 
-                                    // Verificăm dacă NU are imunitate de la un Slime Block / Pat
                                     boolean hasBounceImmunity = bounceImmunity.containsKey(uuid) && bounceImmunity.get(uuid) > System.currentTimeMillis();
 
                                     if (!hasBounceImmunity && ascendTicks > MAX_ASCENSION_TICKS) {
@@ -148,7 +146,6 @@ public class Fly implements Listener {
     private void flagAndRubberband(Player player, UUID uuid, String hackType, String details, Location badLoc) {
         flagPlayer.addFlag(player, hackType, details);
 
-        // Rubber-Band sigur la locația curată
         Location safe = lastSafeLocation.getOrDefault(uuid, player.getLocation());
         player.teleport(safe, PlayerTeleportEvent.TeleportCause.PLUGIN);
 
@@ -171,7 +168,7 @@ public class Fly implements Listener {
         if (to != null) {
             resetTicksAndSafeLocation(uuid, to);
             lastPosMap.put(uuid, new double[]{to.getX(), to.getY(), to.getZ()});
-            bounceImmunity.put(uuid, System.currentTimeMillis() + 1000L); // Protecție după teleportare
+            bounceImmunity.put(uuid, System.currentTimeMillis() + 1000L);
         }
     }
 
@@ -185,10 +182,12 @@ public class Fly implements Listener {
         lastPosMap.remove(uuid);
     }
 
+    // === FIX GEOMETRIC PENTRU HITBOX-URI DE 1.5 ===
     private boolean isNearGround(Location loc) {
         int minX = (int) Math.floor(loc.getX() - 0.3);
         int maxX = (int) Math.floor(loc.getX() + 0.3);
-        int minY = (int) Math.floor(loc.getY() - 0.5);
+        // Căutăm până la 1.5 blocuri în jos pentru a găsi Ziduri și Garduri!
+        int minY = (int) Math.floor(loc.getY() - 1.5);
         int maxY = (int) Math.floor(loc.getY() + 0.5);
         int minZ = (int) Math.floor(loc.getZ() - 0.3);
         int maxZ = (int) Math.floor(loc.getZ() + 0.3);
@@ -200,14 +199,22 @@ public class Fly implements Listener {
                     Material type = block.getType();
 
                     if (type.isAir()) continue;
-                    if (type.isSolid()) return true;
 
                     String name = type.name();
-                    if (name.contains("SNOW") || name.contains("CARPET") || name.contains("SLAB") ||
-                            name.contains("STEP") || name.contains("STAIRS") || name.contains("FENCE") ||
-                            name.contains("WALL") || name.contains("LILY") || name.contains("WATER") ||
-                            name.contains("LAVA") || name.contains("LADDER") || name.contains("VINE")) {
+
+                    // Dacă blocul este gard sau perete, îi acceptăm înălțimea vizuală extinsă
+                    if (name.contains("FENCE") || name.contains("WALL")) {
                         return true;
+                    }
+
+                    // Pentru restul blocurilor normale, validăm doar dacă sunt la distanța firească de 0.6
+                    if (by >= Math.floor(loc.getY() - 0.6)) {
+                        if (type.isSolid() || name.contains("SNOW") || name.contains("CARPET") || name.contains("SLAB") ||
+                                name.contains("STEP") || name.contains("STAIRS") || name.contains("LILY") || name.contains("WATER") ||
+                                name.contains("LAVA") || name.contains("LADDER") || name.contains("VINE") || name.contains("LEAVES") ||
+                                name.contains("ICE")) {
+                            return true;
+                        }
                     }
                 }
             }
@@ -215,13 +222,9 @@ public class Fly implements Listener {
         return false;
     }
 
-    /**
-     * Scanăm dacă jucătorul atinge / a aterizat pe un bloc care îl aruncă în sus (Bounce).
-     */
     private boolean isBouncyBlock(Location loc) {
         int minX = (int) Math.floor(loc.getX() - 0.3);
         int maxX = (int) Math.floor(loc.getX() + 0.3);
-        // Ne interesează exclusiv blocurile DE SUB jucător pentru efectul de bounce
         int minY = (int) Math.floor(loc.getY() - 0.5);
         int maxY = (int) Math.floor(loc.getY());
         int minZ = (int) Math.floor(loc.getZ() - 0.3);
@@ -231,7 +234,6 @@ public class Fly implements Listener {
             for (int by = minY; by <= maxY; by++) {
                 for (int bz = minZ; bz <= maxZ; bz++) {
                     String name = loc.getWorld().getBlockAt(bx, by, bz).getType().name();
-                    // Orice variantă de BED sau SLIME_BLOCK dă bounce în Vanilla
                     if (name.contains("SLIME") || name.contains("BED")) {
                         return true;
                     }

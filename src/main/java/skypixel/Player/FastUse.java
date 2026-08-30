@@ -113,7 +113,7 @@ public class FastUse implements Listener {
                 fastUseBuffer.put(uuid, vl);
 
                 if (vl >= MAX_VIOLATIONS) {
-                    flagPlayer.addFlag(player, "FastUse / AutoEat", "Consumed " + consumedItem.name() + " abnormally fast (" + timeTaken + "ms).");
+                    flagPlayer.addFlag(player, "FastUse", "Consumed " + consumedItem.name() + " abnormally fast (" + timeTaken + "ms).");
                     event.setCancelled(true);
                     consumeStartTimes.remove(uuid); // Îl forțăm să dea click din nou
 

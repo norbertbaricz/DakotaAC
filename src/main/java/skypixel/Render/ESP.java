@@ -1,7 +1,10 @@
 package skypixel.Render;
 
 import org.bukkit.Bukkit;
+import org.bukkit.FluidCollisionMode;
 import org.bukkit.GameMode;
+import org.bukkit.Location;
+import org.bukkit.Material;
 import org.bukkit.World;
 import org.bukkit.entity.Entity;
 import org.bukkit.entity.Player;
@@ -9,27 +12,24 @@ import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
 import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.scheduler.BukkitRunnable;
+import org.bukkit.util.RayTraceResult;
+import org.bukkit.util.Vector;
 import skypixel.dakotaAC;
 
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.UUID;
 
-/**
- * Sistem de prevenire a ESP-ului.
- * Ascunde proactiv jucătorii și entitățile care nu sunt în linia vizuală sau sunt prea departe.
- * Aceasta este o măsură de prevenire și NU generează alerte (flags).
- */
 public class ESP implements Listener {
 
     // =========================================================
-    // --- Easy-to-tune thresholds ---
+    // SETĂRI UȘOR DE REGLAT
     // =========================================================
-    private static final double MAX_ENTITY_RANGE = 48.0D; // Distanța maximă în blocuri la care calculăm entitățile
-    private static final long TASK_INTERVAL_TICKS = 5L;   // Cât de des rulează (5 tick-uri = de 4 ori pe secundă)
+    // Distanța maximă la care procesăm entitățile. Orice e peste, dispare.
+    private static final double MAX_ENTITY_RANGE = 40.0D;
+    private static final long TASK_INTERVAL_TICKS = 5L;
     // =========================================================
 
-    // Stocăm jucătorii și entitățile care sunt ascunse pentru fiecare "privitor".
     private static final HashMap<UUID, HashSet<UUID>> hiddenPlayers = new HashMap<>();
     private static final HashMap<UUID, HashSet<UUID>> hiddenEntities = new HashMap<>();
 
@@ -40,7 +40,6 @@ public class ESP implements Listener {
                 if (!dakotaAC.isCheckActive("ESP")) return;
 
                 for (Player viewer : Bukkit.getOnlinePlayers()) {
-                    // Spectatorii pot vedea prin pereți, deci îi ignorăm
                     if (viewer.getGameMode() == GameMode.SPECTATOR) continue;
 
                     UUID viewerId = viewer.getUniqueId();
@@ -50,27 +49,25 @@ public class ESP implements Listener {
                     HashSet<UUID> hiddenP = hiddenPlayers.get(viewerId);
                     HashSet<UUID> hiddenE = hiddenEntities.get(viewerId);
 
-                    // 1. Logica pentru JUCĂTORI (metoda vanish de jucători)
+                    // 1. JUCĂTORI (Anti-Player ESP)
                     for (Player target : Bukkit.getOnlinePlayers()) {
-                        if (viewer.equals(target)) continue; // Nu te poți ascunde de tine însuți
+                        if (viewer.equals(target)) continue;
 
-                        if (!viewer.hasLineOfSight(target)) {
+                        if (!hasTrueLineOfSight(viewer, target)) {
                             hidePlayer(viewer, target, hiddenP);
                         } else {
                             showPlayer(viewer, target, hiddenP);
                         }
                     }
 
-                    // 2. Logica pentru ENTITĂȚI NON-PLAYER (mob-uri, iteme pe jos, etc.)
-                    // Folosim getNearbyEntities pentru performanță (nu iterăm toate entitățile din lume)
+                    // 2. ENTITĂȚI (Anti-Mob / Item ESP)
                     for (Entity target : viewer.getNearbyEntities(MAX_ENTITY_RANGE, MAX_ENTITY_RANGE, MAX_ENTITY_RANGE)) {
-                        // Excludem jucătorii, i-am verificat deja mai sus
                         if (target instanceof Player) continue;
 
                         boolean outOfRange = viewer.getLocation().distanceSquared(target.getLocation()) > (MAX_ENTITY_RANGE * MAX_ENTITY_RANGE);
-                        boolean noLineOfSight = !viewer.hasLineOfSight(target);
+                        boolean noLineOfSight = !hasTrueLineOfSight(viewer, target);
 
-                        // Dacă entitatea e prea departe SAU nu e în linia vizuală, o ascundem
+                        // Trimiterea pachetului nativ de ENTITY_DESTROY șterge ESP-ul complet
                         if (outOfRange || noLineOfSight) {
                             hideEntity(viewer, target, hiddenE);
                         } else {
@@ -82,8 +79,44 @@ public class ESP implements Listener {
         }.runTaskTimer(dakotaAC.getInstance(), 0L, TASK_INTERVAL_TICKS);
     }
 
+    /**
+     * RayTrace inteligent în 2 puncte care ignoră formele transparente/decorative.
+     */
+    private boolean hasTrueLineOfSight(Player viewer, Entity target) {
+        Location eye = viewer.getEyeLocation();
+        double height = target.getHeight();
+
+        Location[] points = {
+                target.getLocation().add(0, height * 0.8, 0),
+                target.getLocation().add(0, height * 0.1, 0)
+        };
+
+        for (Location point : points) {
+            double distance = eye.distance(point);
+            if (distance < 2.5) return true;
+
+            Vector direction = point.toVector().subtract(eye.toVector()).normalize();
+
+            RayTraceResult ray = viewer.getWorld().rayTraceBlocks(
+                    eye, direction, distance, FluidCollisionMode.NEVER, true
+            );
+
+            if (ray == null || ray.getHitBlock() == null) {
+                return true;
+            }
+
+            Material hitType = ray.getHitBlock().getType();
+            if (!hitType.isOccluding() || hitType.name().contains("FENCE") || hitType.name().contains("WALL") ||
+                    hitType.name().contains("LEAVES") || hitType.name().contains("GLASS") ||
+                    hitType.name().contains("SLAB") || hitType.name().contains("STAIRS") || hitType.name().contains("IRON_BARS")) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     // ========================================================================
-    // Metode pentru JUCĂTORI (hidePlayer / showPlayer)
+    // METODE NATIVE BUKKIT (Gestionează automat pachetele Destroy/Spawn)
     // ========================================================================
 
     private void hidePlayer(Player viewer, Player target, HashSet<UUID> hiddenSet) {
@@ -99,10 +132,6 @@ public class ESP implements Listener {
             hiddenSet.remove(target.getUniqueId());
         }
     }
-
-    // ========================================================================
-    // Metode pentru ENTITĂȚI (hideEntity / showEntity - specifice Paper 1.17+)
-    // ========================================================================
 
     private void hideEntity(Player viewer, Entity target, HashSet<UUID> hiddenSet) {
         if (!hiddenSet.contains(target.getUniqueId())) {
@@ -125,30 +154,21 @@ public class ESP implements Listener {
     @EventHandler
     public void onPlayerQuit(PlayerQuitEvent event) {
         UUID quitId = event.getPlayer().getUniqueId();
-
-        // Ștergem datele jucătorului care a ieșit
         hiddenPlayers.remove(quitId);
         hiddenEntities.remove(quitId);
 
-        // Eliminăm jucătorul din listele celorlalți
         for (HashSet<UUID> hiddenSet : hiddenPlayers.values()) {
             hiddenSet.remove(quitId);
         }
     }
 
-    /**
-     * Previne bug-urile de invizibilitate la /reload sau la oprirea pluginului.
-     * Face toți jucătorii și entitățile din nou vizibile.
-     */
     public static void cleanupAll() {
         for (Player viewer : Bukkit.getOnlinePlayers()) {
-            // Re-arătăm jucătorii
             for (Player target : Bukkit.getOnlinePlayers()) {
                 if (!viewer.equals(target)) {
                     viewer.showPlayer(dakotaAC.getInstance(), target);
                 }
             }
-            // Re-arătăm toate entitățile din lume către privitor
             for (World world : Bukkit.getWorlds()) {
                 for (Entity entity : world.getEntities()) {
                     if (!(entity instanceof Player) && entity.isValid()) {
