@@ -25,7 +25,7 @@ public class ESP implements Listener {
     // =========================================================
     // SETĂRI UȘOR DE REGLAT
     // =========================================================
-    // Distanța maximă la care procesăm entitățile. Orice e peste, dispare.
+    // Distanța maximă la care procesăm entitățile/jucătorii.
     private static final double MAX_ENTITY_RANGE = 40.0D;
     private static final long TASK_INTERVAL_TICKS = 5L;
     // =========================================================
@@ -53,7 +53,15 @@ public class ESP implements Listener {
                     for (Player target : Bukkit.getOnlinePlayers()) {
                         if (viewer.equals(target)) continue;
 
-                        if (!hasTrueLineOfSight(viewer, target)) {
+                        // FIX: Previne eroarea de calcul matematic între dimensiuni diferite (Overworld/Nether)
+                        if (!viewer.getWorld().equals(target.getWorld())) {
+                            continue;
+                        }
+
+                        // FIX PERFORMANȚĂ: Nu procesăm jucătorii aflați la kilometri distanță!
+                        boolean outOfRange = viewer.getLocation().distanceSquared(target.getLocation()) > (MAX_ENTITY_RANGE * MAX_ENTITY_RANGE);
+
+                        if (outOfRange || !hasTrueLineOfSight(viewer, target)) {
                             hidePlayer(viewer, target, hiddenP);
                         } else {
                             showPlayer(viewer, target, hiddenP);
@@ -67,7 +75,6 @@ public class ESP implements Listener {
                         boolean outOfRange = viewer.getLocation().distanceSquared(target.getLocation()) > (MAX_ENTITY_RANGE * MAX_ENTITY_RANGE);
                         boolean noLineOfSight = !hasTrueLineOfSight(viewer, target);
 
-                        // Trimiterea pachetului nativ de ENTITY_DESTROY șterge ESP-ul complet
                         if (outOfRange || noLineOfSight) {
                             hideEntity(viewer, target, hiddenE);
                         } else {
@@ -83,6 +90,9 @@ public class ESP implements Listener {
      * RayTrace inteligent în 2 puncte care ignoră formele transparente/decorative.
      */
     private boolean hasTrueLineOfSight(Player viewer, Entity target) {
+        // Dublă protecție pentru dimensiuni, direct la sursa calculului
+        if (viewer.getWorld() != target.getWorld()) return false;
+
         Location eye = viewer.getEyeLocation();
         double height = target.getHeight();
 

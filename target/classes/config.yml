@@ -7,7 +7,7 @@
 #  ██████╔╝██║  ██║██║  ██╗██████╔╝   ██║   ██║  ██║██║  ██║╚██████╗
 #  ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚═════╝    ╚═╝   ╚═╝  ╚═╝╚═╝  ╚═╝ ╚═════╝
 #
-#                   Advanced Anti-Cheat System
+#                    Advanced Anti-Cheat System
 #                      Author: MaxUltimat3
 #
 # ==========================================================
@@ -68,7 +68,7 @@ Modules:
     enabled: true
   Blink:
     enabled: true
-  Regen:            
+  Regen:
     enabled: true
 
   # --- Fun & Misc Checks ---
@@ -110,9 +110,9 @@ Modules:
     enabled: true
   InventoryCleaner:
     enabled: true
-  Version:          
+  Version:
     enabled: true
-  AntiVPN:         
+  AntiVPN:
     enabled: true
 
   # --- Render Checks ---
@@ -133,4 +133,6 @@ Modules:
   Nuker:
     enabled: true
   Scaffold:
+    enabled: true
+  Timer:
     enabled: true

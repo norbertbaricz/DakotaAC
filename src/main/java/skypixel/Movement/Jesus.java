@@ -26,14 +26,10 @@ public class Jesus implements Listener {
     // ==========================================
     // SETĂRI UȘOR DE REGLAT (EASY TO TUNE)
     // ==========================================
-    // Câte pachete de "hover" pe apă sunt permise înainte de flag?
     private static final int MAX_VIOLATIONS = 5;
-
-    // Viteza maximă pe axa Y pentru modul "Dolphin/Bounce" al hack-urilor Jesus
     private static final double MAX_BOUNCE_Y = 0.1;
     // ==========================================
 
-    // Folosim ConcurrentHashMap pentru siguranță asincronă
     private final ConcurrentHashMap<UUID, Integer> jesusBuffer = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<UUID, double[]> lastPosMap = new ConcurrentHashMap<>();
 
@@ -69,25 +65,19 @@ public class Jesus implements Listener {
                             double deltaZ = toZ - fromPos[2];
                             double deltaXZ = Math.hypot(deltaX, deltaZ);
 
-                            // Ignorăm complet jucătorii care stau nemișcați
                             if (deltaXZ == 0.0 && deltaY == 0.0) {
                                 return;
                             }
 
-                            // === OPTIMIZARE ASINCRONĂ EXTREMĂ (SALVĂM TPS-UL) ===
-                            // Jucătorii legitimi care cad în apă au deltaY < -0.1. Cei care sar din apă au > 0.4.
-                            // Hack-ul Jesus forțează jucătorul să stea la deltaY == 0.0 sau să facă bounce-uri mici.
-                            // Deci, dacă pachetul are o viteză mare de cădere sau de salt, îl excludem asincron!
                             if (deltaY < -0.1 || deltaY > 0.42) {
                                 lastPosMap.put(uuid, new double[]{toX, toY, toZ});
-                                jesusBuffer.remove(uuid); // Curățăm buffer-ul, joacă curat
+                                jesusBuffer.remove(uuid);
                                 return;
                             }
 
                             final double[] safeFromPos = {fromPos[0], fromPos[1], fromPos[2]};
                             lastPosMap.put(uuid, new double[]{toX, toY, toZ});
 
-                            // Doar dacă pachetul pare suspect, delegăm către Main Thread
                             Bukkit.getScheduler().runTask(dakotaAC.getPlugin(dakotaAC.class), () -> {
                                 if (!player.isOnline() || player.isDead()) return;
 
@@ -96,23 +86,25 @@ public class Jesus implements Listener {
                                     return;
                                 }
 
+                                // === FIX PIKEUN LAVA JEUNG KNOCKBACK SEUNEU ===
+                                // Lamun pamaén keur kabeuleum atawa narima ruksakna (damage), ulah dipariksa
+                                if (player.getFireTicks() > 0 || player.getNoDamageTicks() > 10) {
+                                    jesusBuffer.remove(uuid);
+                                    return;
+                                }
+
                                 Location toLoc = new Location(player.getWorld(), toX, toY, toZ);
 
-                                // === FILTRU DE USCAT (SALVĂM PROCESORUL) ===
-                                // Dacă blocul de sub el și de la picioare nu este lichid, înseamnă că aleargă pe iarbă.
-                                // Ștergem buffer-ul și oprim execuția înainte de for-loop-ul 3D greoi.
                                 if (!isLiquidAt(toLoc) && !isLiquidAt(toLoc.clone().subtract(0, 0.1, 0))) {
                                     jesusBuffer.remove(uuid);
                                     return;
                                 }
 
-                                // Dacă atinge apa, dar e lângă mal/nuferi/gheață sau un bloc Waterlogged, e curat
                                 if (isNearSolidBlock(toLoc)) {
                                     jesusBuffer.remove(uuid);
                                     return;
                                 }
 
-                                // Dacă jucătorul înoată legitim cu animația de 1.13+ (Dolphin sprint)
                                 if (player.isSwimming()) {
                                     int vl = jesusBuffer.getOrDefault(uuid, 0);
                                     if (vl > 0) jesusBuffer.put(uuid, vl - 1);
@@ -121,13 +113,12 @@ public class Jesus implements Listener {
 
                                 int vl = jesusBuffer.getOrDefault(uuid, 0);
 
-                                // LOGICA PRINCIPALĂ
                                 if (deltaY == 0.0) {
-                                    vl += 2; // Hover perfect plat pe apă (Solid Jesus)
+                                    vl += 2;
                                 } else if (deltaY > 0.0 && deltaY <= MAX_BOUNCE_Y) {
-                                    vl += 1; // Dolphin/Bounce micro-salturi
+                                    vl += 1;
                                 } else {
-                                    if (vl > 0) vl--; // Scufundare legitimă
+                                    if (vl > 0) vl--;
                                 }
 
                                 jesusBuffer.put(uuid, vl);
@@ -135,11 +126,9 @@ public class Jesus implements Listener {
                                 if (vl > MAX_VIOLATIONS) {
                                     flagPlayer.addFlag(player, "Jesus", "Unnatural vertical stability in liquid (Y-Speed: " + String.format("%.3f", deltaY) + ")");
 
-                                    // Rubber-Band Subacvatic: Îl teleportăm înapoi și îl tragem în jos intenționat 0.5 blocuri
                                     Location pullDownLoc = new Location(player.getWorld(), safeFromPos[0], safeFromPos[1] - 0.5, safeFromPos[2], player.getLocation().getYaw(), player.getLocation().getPitch());
                                     player.teleport(pullDownLoc, PlayerTeleportEvent.TeleportCause.PLUGIN);
 
-                                    // Resetăm parțial buffer-ul
                                     jesusBuffer.put(uuid, 2);
                                 }
                             });
@@ -171,9 +160,6 @@ public class Jesus implements Listener {
         lastPosMap.remove(uuid);
     }
 
-    /**
-     * Verificăm dacă blocul face parte din noua mecanică acvatică.
-     */
     private boolean isLiquidAt(Location loc) {
         Material type = loc.getBlock().getType();
         return type == Material.WATER || type == Material.LAVA ||
@@ -181,9 +167,6 @@ public class Jesus implements Listener {
                 type.name().contains("BUBBLE_COLUMN");
     }
 
-    /**
-     * Verificare volumetrică pentru margini, bărci și blocuri waterlogged.
-     */
     private boolean isNearSolidBlock(Location loc) {
         int x = loc.getBlockX();
         int y = loc.getBlockY();
@@ -199,7 +182,6 @@ public class Jesus implements Listener {
                         return true;
                     }
 
-                    // Protecție 1.13+: Blocul e în apă, dar este o scară/slab solid (Waterlogged)
                     if (b.getBlockData() instanceof org.bukkit.block.data.Waterlogged) {
                         if (type.isSolid()) return true;
                     }
