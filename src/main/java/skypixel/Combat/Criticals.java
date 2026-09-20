@@ -10,6 +10,7 @@ import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
 import org.bukkit.event.player.PlayerQuitEvent;
+import org.bukkit.potion.PotionEffectType;
 import skypixel.Notification.flagPlayer;
 import skypixel.dakotaAC;
 
@@ -18,30 +19,13 @@ import java.util.concurrent.ConcurrentHashMap;
 
 public class Criticals implements Listener {
 
-    // =========================================================
-    // --- Easy-to-tune thresholds ---
-    // =========================================================
-
-    // În câte tick-uri maxime de la despărțirea de sol verificăm salturile false
-    private static final int MICRO_JUMP_MAX_TICKS = 2;
-
-    // Înălțimea maximă considerată "imposibilă" pentru primele tick-uri de salt
-    private static final double MICRO_JUMP_MAX_HEIGHT = 0.1D;
-
-    // Semnături cunoscute de hack-uri (Offsets). Wurst, Meteor, Impact, etc.
-    // Dacă descoperi o valoare nouă de bypass, pur și simplu adaug-o aici!
-    private static final double[] KNOWN_CHEAT_OFFSETS = {0.0625D, 0.015625D, 0.11D};
-
-    // Toleranța matematică pentru a preveni bug-urile de virgulă mobilă (nu schimba decât dacă e necesar)
-    private static final double MATH_TOLERANCE = 0.0001D;
-
-    // =========================================================
-
-    // Stocăm datele fizice 100% asincron pentru fiecare jucător
+    // Memorie precisă asincronă pentru fiecare jucător
     private final ConcurrentHashMap<UUID, Double> lastYMap = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<UUID, Double> deltaYMap = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<UUID, Double> lastDeltaYMap = new ConcurrentHashMap<>(); // Urmărim curba precedentă a săriturii
     private final ConcurrentHashMap<UUID, Boolean> onGroundMap = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<UUID, Integer> airTicksMap = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<UUID, Long> lastGroundTimeMap = new ConcurrentHashMap<>(); // Pentru a prinde Timer / Blink
 
     public Criticals() {
         ProtocolLibrary.getProtocolManager().addPacketListener(
@@ -50,7 +34,7 @@ public class Criticals implements Listener {
                         PacketType.Play.Client.USE_ENTITY,
                         PacketType.Play.Client.POSITION,
                         PacketType.Play.Client.POSITION_LOOK,
-                        PacketType.Play.Client.LOOK) { // <-- AICI AM ȘTERS PACKET-UL FLYING
+                        PacketType.Play.Client.LOOK) {
 
                     @Override
                     public void onPacketReceiving(PacketEvent event) {
@@ -60,7 +44,6 @@ public class Criticals implements Listener {
                             Player player = event.getPlayer();
                             if (player == null) return;
                             UUID uuid = player.getUniqueId();
-
                             PacketType type = event.getPacketType();
 
                             // ==========================================
@@ -70,59 +53,60 @@ public class Criticals implements Listener {
                                 EnumWrappers.EntityUseAction action = event.getPacket().getEnumEntityUseActions().readSafely(0).getAction();
                                 if (action != EnumWrappers.EntityUseAction.ATTACK) return;
 
-                                Double pY = lastYMap.get(uuid);
                                 Double dY = deltaYMap.get(uuid);
+                                Double lastDY = lastDeltaYMap.get(uuid);
                                 Boolean og = onGroundMap.get(uuid);
                                 Integer ticks = airTicksMap.get(uuid);
+                                Long lastGroundTime = lastGroundTimeMap.get(uuid);
 
-                                if (pY == null || dY == null || og == null || ticks == null) return;
+                                // Dacă nu avem destule date încă, îl lăsăm (previne erori la conectare)
+                                if (dY == null || og == null || ticks == null || lastGroundTime == null) return;
 
-                                // Jucătorii de pe pământ nu dau critice. Hack-urile ocolesc asta spunând 'onGround = false'
+                                // Dacă e pe pământ, nu poate da critice Vanilla, deci îl ignorăm
                                 if (og) return;
 
                                 boolean isFlagged = false;
                                 String flagReason = "";
 
-                                // LOGICA 1: Zero Velocity (Ground Spoof)
-                                // Hackerul minte că e în aer (onGround=false), dar Y-ul lui este complet static.
-                                if (dY == 0.0 && ticks > 0) {
-                                    isFlagged = true;
-                                    flagReason = "Attacked with zero vertical velocity (Ground Spoof).";
-                                }
+                                long timeInAir = System.currentTimeMillis() - lastGroundTime;
 
-                                // LOGICA 2: Impossible Jump Height (Packet Critical)
-                                // Un salt vanilla începe cu +0.42. Verificăm micro-salturile imposibile uman.
-                                else if (!isFlagged && ticks <= MICRO_JUMP_MAX_TICKS && dY > 0.0 && dY < MICRO_JUMP_MAX_HEIGHT) {
-                                    isFlagged = true;
-                                    flagReason = "Impossible micro-jump detected (Packet Math: " + String.format("%.4f", dY) + ").";
-                                }
+                                // --- LOGICA SUPREMĂ PENTRU LIQUIDBOUNCE ---
 
-                                // LOGICA 3: Known Hack Offsets
-                                // Verificăm lista noastră ușor configurabilă de valori "magice" folosite de clienții codați.
-                                else if (!isFlagged) {
-                                    for (double offset : KNOWN_CHEAT_OFFSETS) {
-                                        if (Math.abs(dY - offset) < MATH_TOLERANCE) {
-                                            isFlagged = true;
-                                            flagReason = "Known packet critical signature detected (Offset: " + dY + ").";
-                                            break;
-                                        }
-                                    }
+                                // 1. Ground Spoof / NoGround Mode (Zboară dar stă pe loc vertical)
+                                if (Math.abs(dY) < 0.0001 && ticks > 0) {
+                                    isFlagged = true;
+                                    flagReason = "Zero vertical velocity mid-air (NoGround).";
+                                }
+                                // 2. Packet Mode (Săritură ireală din pachete. Saltul Vanilla pur are minim +0.41)
+                                else if (dY > 0.0 && dY < 0.41 && ticks <= 2) {
+                                    isFlagged = true;
+                                    flagReason = "Impossible micro-jump detected (Y: " + String.format("%.4f", dY) + ").";
+                                }
+                                // 3. Blink / Timer Mode (Trimit toate pachetele instantaneu)
+                                // Jucătorul "cade" spre inamic (dY < 0), dar el a părăsit pământul abia de 50 milisecunde!
+                                else if (dY < 0.0 && lastDY != null && lastDY > 0.0 && timeInAir < 50) {
+                                    isFlagged = true;
+                                    flagReason = "Packet Burst (Blink/Timer) - Jump cycle completed in " + timeInAir + "ms.";
                                 }
 
                                 // EXECUTAREA PEDEPSEI
                                 if (isFlagged) {
-                                    // Anulăm pachetul ASINCRON. Lovitura nici măcar nu ajunge la server, deci playerul legit nu ia damage!
+                                    // Anulăm pachetul asincron. Atacul fals nu face deloc damage!
                                     event.setCancelled(true);
-
                                     final String finalReason = flagReason;
 
-                                    // Trimitem flag-ul în siguranță către Main Thread pentru broadcast
                                     Bukkit.getScheduler().runTask(dakotaAC.getInstance(), () -> {
                                         if (player.isOnline() && !player.isDead()) {
+                                            // Filtre Vanilla (Apă, Elytra, Scări, Poțiuni)
+                                            if (player.isInWater() || player.getVehicle() != null || player.isGliding() ||
+                                                    player.getAllowFlight() || player.isClimbing() ||
+                                                    player.hasPotionEffect(PotionEffectType.JUMP_BOOST) ||
+                                                    player.hasPotionEffect(PotionEffectType.LEVITATION)) {
+                                                return;
+                                            }
 
-                                            // Filtre de siguranță Vanilla (Bypass-uri legale)
-                                            // Excludem apa, bărcile, elytrele, lianele (care pot afecta gravitația).
-                                            if (player.isInWater() || player.getVehicle() != null || player.isGliding() || player.getAllowFlight() || player.isClimbing()) {
+                                            // Previne alarmele false dacă este în pânze de păianjen
+                                            if (player.getLocation().getBlock().getType().name().contains("COBWEB")) {
                                                 return;
                                             }
 
@@ -130,36 +114,39 @@ public class Criticals implements Listener {
                                         }
                                     });
                                 }
-
-                                // ==========================================
-                                // 2. ACTUALIZAREA TRACKER-ULUI (Mișcare)
-                                // ==========================================
-                            } else {
-                                // Toate pachetele de zbor (POSITION/POSITION_LOOK/LOOK) conțin starea "onGround" pe poziția 0
+                            }
+                            // ==========================================
+                            // 2. ACTUALIZAREA TRACKER-ULUI GEOMETRIC
+                            // ==========================================
+                            else {
                                 boolean onGround = event.getPacket().getBooleans().readSafely(0);
                                 onGroundMap.put(uuid, onGround);
 
-                                // Calculăm "Air Ticks" (câte pachete a stat în aer)
                                 if (onGround) {
                                     airTicksMap.put(uuid, 0);
+                                    lastGroundTimeMap.put(uuid, System.currentTimeMillis());
                                 } else {
                                     airTicksMap.put(uuid, airTicksMap.getOrDefault(uuid, 0) + 1);
                                 }
 
-                                // Doar pachetele cu locație au axa Y. Calculăm viteza verticală curentă.
                                 if (type == PacketType.Play.Client.POSITION || type == PacketType.Play.Client.POSITION_LOOK) {
                                     double y = event.getPacket().getDoubles().readSafely(1);
                                     Double prevY = lastYMap.get(uuid);
 
                                     if (prevY != null) {
-                                        deltaYMap.put(uuid, y - prevY);
+                                        double currentDelta = y - prevY;
+                                        Double prevDelta = deltaYMap.getOrDefault(uuid, 0.0);
+
+                                        // Salvăm cu un pas în spate pentru a analiza curba săriturii
+                                        lastDeltaYMap.put(uuid, prevDelta);
+                                        deltaYMap.put(uuid, currentDelta);
                                     }
                                     lastYMap.put(uuid, y);
                                 }
                             }
 
                         } catch (Exception ex) {
-                            // Previne erorile în consolă dacă un alt plugin strică structura pachetului
+                            // Ignorăm silențios pachetele corupte trimise intenționat de "Crash Exploits"
                         }
                     }
                 }
@@ -168,11 +155,12 @@ public class Criticals implements Listener {
 
     @EventHandler
     public void onPlayerQuit(PlayerQuitEvent event) {
-        // Prevenirea memory leaks-urilor prin ștergerea hărților la ieșire
         UUID uuid = event.getPlayer().getUniqueId();
         lastYMap.remove(uuid);
         deltaYMap.remove(uuid);
+        lastDeltaYMap.remove(uuid);
         onGroundMap.remove(uuid);
         airTicksMap.remove(uuid);
+        lastGroundTimeMap.remove(uuid);
     }
 }

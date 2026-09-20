@@ -18,7 +18,7 @@ public class flagPlayer {
 
     // Cooldown between alerts for the same player (in milliseconds)
     // 3000ms = 3 seconds. Prevents chat/console spam.
-    private static final long ALERT_COOLDOWN_MS = 1500L;
+    private static final long ALERT_COOLDOWN_MS = 3000L;
 
     // Message formats (Use %player%, %hack%, and %details% as placeholders)
     private static final String CONSOLE_ALERT_FORMAT = "&8[&cDakotaAC&8] &e%player% &7was flagged for &c%hack% &8(&7%details%&8)";

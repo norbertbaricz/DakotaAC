@@ -33,11 +33,11 @@ public class AutoArmor implements Listener {
     // =========================================================
     // --- Easy-to-tune thresholds ---
     // =========================================================
-    private static final long DECOY_INTERVAL_TICKS = 60L; // La cat timp facem testul cu momeala (3 secunde)
-    private static final long DECOY_DURATION_TICKS = 3L;  // Cat timp sta momeala pe ecranul lui (150ms)
-    private static final int SEQUENTIAL_EQUIP_MS = 60;    // Timp minim intre 2 piese echipate manual din GUI
-    private static final int PICKUP_EQUIP_MS = 150;       // Timp minim de reactie dupa ce a ridicat piesa
-    private static final int BREAK_EQUIP_MS = 150;        // Timp minim de reactie dupa ce i s-a spart piesa
+    private static final long DECOY_INTERVAL_TICKS = 60L;
+    private static final long DECOY_DURATION_TICKS = 3L;
+    private static final int SEQUENTIAL_EQUIP_MS = 60;
+    private static final int PICKUP_EQUIP_MS = 150;
+    private static final int BREAK_EQUIP_MS = 150;
     // =========================================================
 
     private static final ProtocolManager PROTOCOL = ProtocolLibrary.getProtocolManager();
@@ -45,7 +45,6 @@ public class AutoArmor implements Listener {
     private static final ConcurrentHashMap<UUID, Long> lastBreak = new ConcurrentHashMap<>();
     private static final ConcurrentHashMap<UUID, Long> lastEquipTime = new ConcurrentHashMap<>();
 
-    // Stocam datele momelii
     private static final ConcurrentHashMap<UUID, DecoyData> activeDecoys = new ConcurrentHashMap<>();
     private static final Random RANDOM = new Random();
 
@@ -61,7 +60,6 @@ public class AutoArmor implements Listener {
                     continue;
                 }
 
-                // Daca are un cufar deschis, il ignoram
                 if (player.getOpenInventory().getType() != InventoryType.CRAFTING) {
                     continue;
                 }
@@ -69,7 +67,6 @@ public class AutoArmor implements Listener {
                 UUID uuid = player.getUniqueId();
                 if (activeDecoys.containsKey(uuid)) continue;
 
-                // Cautam sloturi goale in inventarul principal (9-35). Ignoram hotbar-ul (0-8)
                 List<Integer> emptySlots = new ArrayList<>();
                 for (int i = 9; i <= 35; i++) {
                     ItemStack item = player.getInventory().getItem(i);
@@ -80,10 +77,8 @@ public class AutoArmor implements Listener {
 
                 if (emptySlots.isEmpty()) continue;
 
-                // Alegem un slot random
                 int randomSlot = emptySlots.get(RANDOM.nextInt(emptySlots.size()));
 
-                // Generam momeala
                 ItemStack decoyItem = new ItemStack(Material.NETHERITE_CHESTPLATE);
                 ItemMeta meta = decoyItem.getItemMeta();
                 if (meta != null) {
@@ -91,18 +86,14 @@ public class AutoArmor implements Listener {
                     decoyItem.setItemMeta(meta);
                 }
 
-                // Trimitem armura falsă DOAR prin pachete (pe server slotul ramane gol!)
                 sendFakeItem(player, randomSlot, decoyItem);
                 activeDecoys.put(uuid, new DecoyData(randomSlot, System.currentTimeMillis()));
 
-                // Dupa 3 tick-uri (150ms), stergem vizual momeala de pe client
                 Bukkit.getScheduler().runTaskLater(dakotaAC.getInstance(), () -> {
                     if (activeDecoys.containsKey(uuid) && player.isOnline()) {
                         sendFakeItem(player, randomSlot, new ItemStack(Material.AIR));
                         activeDecoys.remove(uuid);
 
-                        // FIX-UL MAGIC PENTRU GHOST ITEMS:
-                        // Fortam clientul sa isi refaca inventarul vizual ca sa stergem orice fantoma ramasa
                         player.updateInventory();
                     }
                 }, DECOY_DURATION_TICKS);
@@ -111,20 +102,20 @@ public class AutoArmor implements Listener {
     }
 
     // ========================================================
-    // LOGICA DE TRIMITERE A ITEMELOR FALSE (PROTOCOL LIB)
+    // LOGICA DE TRIMITERE A ITEMELOR FALSE (STATIC ACUM)
     // ========================================================
-    private void sendFakeItem(Player player, int slot, ItemStack item) {
+    private static void sendFakeItem(Player player, int slot, ItemStack item) {
         try {
             PacketContainer packet = PROTOCOL.createPacket(PacketType.Play.Server.SET_SLOT);
 
             if (packet.getIntegers().size() > 0) {
-                packet.getIntegers().writeSafely(0, 0); // Window ID 0 = Inventarul jucatorului
+                packet.getIntegers().writeSafely(0, 0);
             } else if (packet.getBytes().size() > 0) {
                 packet.getBytes().writeSafely(0, (byte) 0);
             }
 
             if (packet.getIntegers().size() > 1) {
-                packet.getIntegers().writeSafely(1, 0); // State ID
+                packet.getIntegers().writeSafely(1, 0);
             }
 
             if (packet.getIntegers().size() > 2) {
@@ -150,11 +141,9 @@ public class AutoArmor implements Listener {
         Player player = (Player) event.getWhoClicked();
         UUID uuid = player.getUniqueId();
 
-        // 1. VERIFICARE DECOY (MOMEALA)
         if (activeDecoys.containsKey(uuid)) {
             DecoyData decoy = activeDecoys.get(uuid);
 
-            // Clientul codat a incercat sa dea click fix pe momeala
             if (event.getSlot() == decoy.slot) {
                 event.setCancelled(true);
                 long reactionTime = System.currentTimeMillis() - decoy.spawnTime;
@@ -164,14 +153,11 @@ public class AutoArmor implements Listener {
 
                 flagPlayer.addFlag(player, "AutoArmor", "Tried to equip a ghost decoy piece in " + reactionTime + "ms.");
 
-                // FIX-UL MAGIC NR 2: Daca apuca sa dea click, hack-ul va incerca sa o mute
-                // Asta cauzeaza Ghost Item in slotul de armura. updateInventory() curata asta complet.
                 Bukkit.getScheduler().runTask(dakotaAC.getInstance(), player::updateInventory);
                 return;
             }
         }
 
-        // 2. VERIFICARE VITEZA ECHIPARE NORMALA DIN GUI
         boolean isArmorEquip = false;
 
         if (event.getSlotType() == InventoryType.SlotType.ARMOR) {
@@ -280,8 +266,9 @@ public class AutoArmor implements Listener {
         for (Map.Entry<UUID, DecoyData> entry : activeDecoys.entrySet()) {
             Player player = Bukkit.getPlayer(entry.getKey());
             if (player != null && player.isOnline()) {
-                new AutoArmor().sendFakeItem(player, entry.getValue().slot, new ItemStack(Material.AIR));
-                player.updateInventory(); // stergem si la curatare
+                // Acum apelăm metoda direct, fără să mai creăm un nou AutoArmor!
+                sendFakeItem(player, entry.getValue().slot, new ItemStack(Material.AIR));
+                player.updateInventory();
             }
         }
         activeDecoys.clear();

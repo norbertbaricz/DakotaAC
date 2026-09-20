@@ -96,10 +96,12 @@ skypixel\Exploit\ServerCrasher$1.class
 skypixel\Commands\Report.class
 skypixel\Movement\InventoryMove.class
 skypixel\World\Fucker$1.class
+skypixel\World\Timer.class
 skypixel\Commands\Check.class
 skypixel\Player\InventoryCleaner.class
 skypixel\Commands\Notify.class
 skypixel\Exploit\Phase$1.class
+skypixel\World\Timer$1.class
 skypixel\Movement\NoSlowDown.class
 skypixel\Combat\Hitbox$1.class
 skypixel\Movement\Fly$1.class

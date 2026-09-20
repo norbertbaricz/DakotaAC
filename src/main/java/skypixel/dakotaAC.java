@@ -185,6 +185,7 @@ public final class dakotaAC extends JavaPlugin {
         loadModuleState("Fucker");
         loadModuleState("Nuker");
         loadModuleState("Scaffold");
+        loadModuleState("Timer");
     }
 
     private void loadModuleState(String moduleName) {
@@ -239,6 +240,7 @@ public final class dakotaAC extends JavaPlugin {
         pm.registerEvents(new Fucker(), this);
         pm.registerEvents(new Nuker(), this);
         pm.registerEvents(new Scaffold(), this);
+        pm.registerEvents(new Timer(), this);
         pm.registerEvents(new Violation(), this);
     }
 
