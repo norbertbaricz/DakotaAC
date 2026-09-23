@@ -33,8 +33,10 @@ public class AutoArmor implements Listener {
     // =========================================================
     // --- Easy-to-tune thresholds ---
     // =========================================================
-    private static final long DECOY_INTERVAL_TICKS = 60L;
-    private static final long DECOY_DURATION_TICKS = 3L;
+    private static final long DECOY_INTERVAL_TICKS = 80L;  // Testăm la fiecare 4 secunde
+    private static final long DECOY_DURATION_TICKS = 10L;  // Momeala stă 500ms (Așteptăm să muște hack-ul cu delay)
+    private static final long INHUMAN_REACTION_MS = 400L;  // Niciun om nu poate observa și da click în sub 400ms
+
     private static final int SEQUENTIAL_EQUIP_MS = 60;
     private static final int PICKUP_EQUIP_MS = 150;
     private static final int BREAK_EQUIP_MS = 150;
@@ -49,9 +51,6 @@ public class AutoArmor implements Listener {
     private static final Random RANDOM = new Random();
 
     public AutoArmor() {
-        // ========================================================
-        // ENGINE PENTRU DECOY (CLIENT-SIDE PACKETS)
-        // ========================================================
         Bukkit.getScheduler().runTaskTimer(dakotaAC.getInstance(), () -> {
             if (!dakotaAC.isCheckActive("AutoArmor")) return;
 
@@ -79,12 +78,7 @@ public class AutoArmor implements Listener {
 
                 int randomSlot = emptySlots.get(RANDOM.nextInt(emptySlots.size()));
 
-                ItemStack decoyItem = new ItemStack(Material.NETHERITE_CHESTPLATE);
-                ItemMeta meta = decoyItem.getItemMeta();
-                if (meta != null) {
-                    meta.setDisplayName("§cSystem Decoy");
-                    decoyItem.setItemMeta(meta);
-                }
+                ItemStack decoyItem = generateSmartDecoy(player);
 
                 sendFakeItem(player, randomSlot, decoyItem);
                 activeDecoys.put(uuid, new DecoyData(randomSlot, System.currentTimeMillis()));
@@ -101,9 +95,42 @@ public class AutoArmor implements Listener {
         }, 100L, DECOY_INTERVAL_TICKS);
     }
 
-    // ========================================================
-    // LOGICA DE TRIMITERE A ITEMELOR FALSE (STATIC ACUM)
-    // ========================================================
+    private ItemStack generateSmartDecoy(Player player) {
+        String[] types = {"_HELMET", "_CHESTPLATE", "_LEGGINGS", "_BOOTS"};
+        int randIndex = RANDOM.nextInt(types.length);
+        String suffix = types[randIndex];
+
+        ItemStack currentEquipped = null;
+        switch (randIndex) {
+            case 0: currentEquipped = player.getInventory().getHelmet(); break;
+            case 1: currentEquipped = player.getInventory().getChestplate(); break;
+            case 2: currentEquipped = player.getInventory().getLeggings(); break;
+            case 3: currentEquipped = player.getInventory().getBoots(); break;
+        }
+
+        String materialPrefix = "NETHERITE";
+
+        if (currentEquipped == null || currentEquipped.getType() == Material.AIR) {
+            materialPrefix = "DIAMOND";
+        } else {
+            String name = currentEquipped.getType().name();
+            if (name.startsWith("LEATHER")) materialPrefix = "CHAINMAIL";
+            else if (name.startsWith("CHAINMAIL") || name.startsWith("GOLDEN")) materialPrefix = "IRON";
+            else if (name.startsWith("IRON")) materialPrefix = "DIAMOND";
+            else if (name.startsWith("DIAMOND")) materialPrefix = "NETHERITE";
+            else if (name.startsWith("NETHERITE")) materialPrefix = "NETHERITE";
+        }
+
+        ItemStack decoy = new ItemStack(Material.valueOf(materialPrefix + suffix));
+        ItemMeta meta = decoy.getItemMeta();
+        if (meta != null) {
+            meta.setDisplayName("§cSystem Decoy");
+            meta.setUnbreakable(true);
+            decoy.setItemMeta(meta);
+        }
+        return decoy;
+    }
+
     private static void sendFakeItem(Player player, int slot, ItemStack item) {
         try {
             PacketContainer packet = PROTOCOL.createPacket(PacketType.Play.Server.SET_SLOT);
@@ -130,9 +157,6 @@ public class AutoArmor implements Listener {
         }
     }
 
-    // ========================================================
-    // ASCULTĂM SLOTURILE DIN GUI ȘI TESTUL DE DECOY
-    // ========================================================
     @EventHandler(priority = EventPriority.HIGHEST)
     public void onInventoryClick(InventoryClickEvent event) {
         if (!dakotaAC.isCheckActive("AutoArmor")) return;
@@ -144,14 +168,18 @@ public class AutoArmor implements Listener {
         if (activeDecoys.containsKey(uuid)) {
             DecoyData decoy = activeDecoys.get(uuid);
 
-            if (event.getSlot() == decoy.slot) {
+            // FIX: Folosim getRawSlot() pentru a prinde click-ul exact trimis de pachetul hack-ului
+            if (event.getRawSlot() == decoy.slot) {
                 event.setCancelled(true);
                 long reactionTime = System.currentTimeMillis() - decoy.spawnTime;
 
                 sendFakeItem(player, decoy.slot, new ItemStack(Material.AIR));
                 activeDecoys.remove(uuid);
 
-                flagPlayer.addFlag(player, "AutoArmor", "Tried to equip a ghost decoy piece in " + reactionTime + "ms.");
+                // FIX: Oprim alarmele false dacă un jucător legitim apucă să dea click din greșeală
+                if (reactionTime < INHUMAN_REACTION_MS) {
+                    flagPlayer.addFlag(player, "AutoArmor", "Equipped ghost decoy in inhuman time (" + reactionTime + "ms).");
+                }
 
                 Bukkit.getScheduler().runTask(dakotaAC.getInstance(), player::updateInventory);
                 return;
@@ -177,9 +205,6 @@ public class AutoArmor implements Listener {
         }
     }
 
-    // ========================================================
-    // MOTORUL CENTRAL DE VALIDARE A VITEZEI
-    // ========================================================
     private boolean validateEquipTiming(Player player, UUID uuid, long currentTime, String type) {
         boolean flagged = false;
         String reason = "";
@@ -222,9 +247,6 @@ public class AutoArmor implements Listener {
         return false;
     }
 
-    // ========================================================
-    // EVENIMENTE DE REFERINȚĂ
-    // ========================================================
     @EventHandler(priority = EventPriority.MONITOR)
     public void onPickup(EntityPickupItemEvent event) {
         if (!(event.getEntity() instanceof Player)) return;
@@ -259,14 +281,10 @@ public class AutoArmor implements Listener {
                 name.equals("ELYTRA");
     }
 
-    // ========================================================
-    // CURĂȚARE LA OPRIREA SERVERULUI/PLUGINULUI
-    // ========================================================
     public static void cleanupAllDecoys() {
         for (Map.Entry<UUID, DecoyData> entry : activeDecoys.entrySet()) {
             Player player = Bukkit.getPlayer(entry.getKey());
             if (player != null && player.isOnline()) {
-                // Acum apelăm metoda direct, fără să mai creăm un nou AutoArmor!
                 sendFakeItem(player, entry.getValue().slot, new ItemStack(Material.AIR));
                 player.updateInventory();
             }
