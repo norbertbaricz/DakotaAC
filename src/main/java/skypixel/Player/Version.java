@@ -100,8 +100,21 @@ public class Version implements Listener, PluginMessageListener {
         Bukkit.getScheduler().runTaskLater(dakotaAC.getPlugin(dakotaAC.class), () -> {
             if (!player.isOnline()) return;
 
-            // Extragem Protocol Version prin ProtocolLib
-            int protocolVersion = ProtocolLibrary.getProtocolManager().getProtocolVersion(player);
+            int protocolVersion = -1;
+
+            // 1. Încercăm să obținem versiunea reală din ViaVersion (Cea mai precisă metodă)
+            if (Bukkit.getPluginManager().getPlugin("ViaVersion") != null) {
+                try {
+                    protocolVersion = com.viaversion.viaversion.api.Via.getAPI().getPlayerVersion(player.getUniqueId());
+                } catch (Exception e) {
+                    // Prevenim erorile dacă API-ul ViaVersion e diferit/vechi
+                }
+            }
+
+            // 2. Fallback: Dacă ViaVersion nu e instalat sau a dat eroare, folosim ProtocolLib
+            if (protocolVersion == -1) {
+                protocolVersion = ProtocolLibrary.getProtocolManager().getProtocolVersion(player);
+            }
 
             // Folosim constanta din secțiunea "Easy to Tune"
             if (protocolVersion < MIN_PROTOCOL_VERSION) {

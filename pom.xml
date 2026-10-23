@@ -4,10 +4,6 @@
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
 
     <modelVersion>4.0.0</modelVersion>
-
-    <!-- =========================================================
-         PROJECT INFORMATION
-         ========================================================= -->
     <groupId>play.skypixel</groupId>
     <artifactId>DakotaAC</artifactId>
     <version>0.18</version>
@@ -16,33 +12,17 @@
     <name>DakotaAC</name>
     <description>High-performance logic-based AntiCheat for Minecraft.</description>
 
-    <!-- =========================================================
-         GLOBAL BUILD SETTINGS
-         ========================================================= -->
     <properties>
-
-        <!-- Java version -->
         <java.version>21</java.version>
-
-        <!-- Project encoding -->
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
 
     </properties>
 
-    <!-- =========================================================
-         BUILD CONFIGURATION
-         ========================================================= -->
     <build>
-
-        <!-- Default Maven goal -->
         <defaultGoal>clean package</defaultGoal>
 
         <plugins>
-
-            <!-- =================================================
-                 JAVA COMPILER
-                 ================================================= -->
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-compiler-plugin</artifactId>
@@ -50,21 +30,13 @@
 
                 <configuration>
 
-                    <!-- Compile using Java 21 -->
                     <release>${java.version}</release>
-
-                    <!-- UTF-8 source encoding -->
                     <encoding>${project.build.sourceEncoding}</encoding>
-
-                    <!-- Show compiler warnings -->
                     <showWarnings>true</showWarnings>
 
                 </configuration>
             </plugin>
 
-            <!-- =================================================
-                 SHADE PLUGIN
-                 ================================================= -->
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-shade-plugin</artifactId>
@@ -72,8 +44,6 @@
 
                 <executions>
                     <execution>
-
-                        <!-- Run during package phase -->
                         <phase>package</phase>
 
                         <goals>
@@ -81,93 +51,42 @@
                         </goals>
 
                         <configuration>
-
-                            <!-- Prevent creation of dependency-reduced-pom.xml -->
                             <createDependencyReducedPom>false</createDependencyReducedPom>
-
                         </configuration>
-
                     </execution>
                 </executions>
             </plugin>
-
-            <!-- =================================================
-                 AUTOMATIC VPS SCP UPLOAD
-                 ================================================= -->
-            <plugin>
-                <groupId>org.apache.maven.plugins</groupId>
-                <artifactId>maven-antrun-plugin</artifactId>
-                <version>3.1.0</version>
-
-                <executions>
-                    <execution>
-
-                        <!-- Run after the JAR has been packaged -->
-                        <phase>package</phase>
-
-                        <goals>
-                            <goal>run</goal>
-                        </goals>
-
-                        <configuration>
-                            <target>
-                                <!-- =================================================
-                                     SURVIVAL SERVER
-                                     ================================================= -->
-                                <echo level="info" message="Uploading to Skypixel SMP..."/>
-
-                                <exec executable="scp" failonerror="true">
-                                    <arg value="target/${project.build.finalName}.jar"/>
-                                    <arg value="root@100.120.106.101:/home/raul/Minecraft/plugins/"/>
-                                </exec>
-
-                                <!-- =================================================
-                                     UPLOAD COMPLETE
-                                     ================================================= -->
-                                <echo level="info" message="Skypixel plugin uploaded successfully to all VPS servers."/>
-                            </target>
-                        </configuration>
-
-                    </execution>
-                </executions>
-            </plugin>
-
         </plugins>
 
-        <!-- =========================================================
-             RESOURCES
-             ========================================================= -->
         <resources>
-
             <resource>
                 <directory>src/main/resources</directory>
                 <filtering>true</filtering>
             </resource>
-
         </resources>
-
     </build>
 
-    <!-- =========================================================
-         PAPERMc REPOSITORY
-         ========================================================= -->
     <repositories>
-
+        <!-- PaperMC Repo -->
         <repository>
             <id>papermc-repo</id>
             <url>https://repo.papermc.io/repository/maven-public/</url>
         </repository>
-
+        <!-- ProtocolLib Repo (Aici găsește versiunile 5.5.0-SNAPSHOT) -->
+        <repository>
+            <id>dmulloy2-repo</id>
+            <url>https://repo.dmulloy2.net/repository/public/</url>
+        </repository>
+        <!-- ViaVersion Repo -->
+        <repository>
+            <id>viaversion-repo</id>
+            <url>https://repo.viaversion.com</url>
+        </repository>
     </repositories>
 
-    <!-- =========================================================
-         DEPENDENCIES
-         ========================================================= -->
     <dependencies>
 
-        <!-- =====================================================
-             PAPER API
-             ===================================================== -->
+        <!-- PAPER API -->
         <dependency>
             <groupId>io.papermc.paper</groupId>
             <artifactId>paper-api</artifactId>
@@ -175,9 +94,7 @@
             <scope>provided</scope>
         </dependency>
 
-        <!-- =====================================================
-             PROTOCOLLIB
-             ===================================================== -->
+        <!-- PROTOCOLLIB (Folosește API-ul, dar rulează pe orice versiune 5.x de pe server) -->
         <dependency>
             <groupId>com.comphenix.protocol</groupId>
             <artifactId>ProtocolLib</artifactId>
@@ -185,6 +102,13 @@
             <scope>provided</scope>
         </dependency>
 
-    </dependencies>
+        <!-- VIAVERSION API (Conține structura care suportă și 5.12.1 la runtime) -->
+        <dependency>
+            <groupId>com.viaversion</groupId>
+            <artifactId>viaversion-api</artifactId>
+            <version>5.0.0</version>
+            <scope>provided</scope>
+        </dependency>
 
+    </dependencies>
 </project>

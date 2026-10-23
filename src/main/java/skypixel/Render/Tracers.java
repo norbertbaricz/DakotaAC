@@ -41,11 +41,11 @@ public class Tracers implements Listener {
     // ==========================================
     // SETĂRI UȘOR DE REGLAT (EASY TO TUNE)
     // ==========================================
-    private static final int DECOYS_PER_SECOND = 20; // Câte entități false spawnăm per jucător
-    private static final long BATCH_INTERVAL_TICKS = 20L; // Intervalul de reîmprospătare (20 ticks = 1 secundă)
-    private static final double MIN_DECOY_DISTANCE = 15.0D; // Distanța minimă a NPC-ului fals
-    private static final double MAX_DECOY_DISTANCE = 25.0D; // Distanța maximă a NPC-ului fals
-    private static final int MAX_VIEW_COUNT_BEFORE_FLAG = 15; // De câte ori are voie să privească direct spre invizibili
+    private static final int DECOYS_PER_SECOND = 20;
+    private static final long BATCH_INTERVAL_TICKS = 20L;
+    private static final double MIN_DECOY_DISTANCE = 15.0D;
+    private static final double MAX_DECOY_DISTANCE = 25.0D;
+    private static final int MAX_VIEW_COUNT_BEFORE_FLAG = 15;
     // ==========================================
 
     private static final ProtocolManager PROTOCOL = ProtocolLibrary.getProtocolManager();
@@ -77,12 +77,10 @@ public class Tracers implements Listener {
         ) {
             @Override
             public void onPacketReceiving(PacketEvent event) {
-                // Packet listeners may run on Netty's thread; Bukkit/player state is handled on the main thread.
                 Bukkit.getScheduler().runTask(dakotaAC.getInstance(), () -> handlePlayerLook(event.getPlayer()));
             }
         });
 
-        // A new batch replaces the previous one once per second, regardless of movement.
         Bukkit.getScheduler().runTaskTimer(dakotaAC.getInstance(), this::spawnBatches, 20L, BATCH_INTERVAL_TICKS);
     }
 
@@ -113,7 +111,6 @@ public class Tracers implements Listener {
     }
 
     private FakeNpc createNpc(Player player) {
-        // Spawn in a ring around the player, never immediately beside them.
         double angle = RANDOM.nextDouble() * Math.PI * 2.0D;
         double distance = MIN_DECOY_DISTANCE
                 + RANDOM.nextDouble() * (MAX_DECOY_DISTANCE - MIN_DECOY_DISTANCE);
@@ -123,10 +120,10 @@ public class Tracers implements Listener {
                 Math.sin(angle) * distance
         );
         UUID profileId = UUID.randomUUID();
-        WrappedGameProfile profile = new WrappedGameProfile(
-                profileId, FAKE_NAMES[RANDOM.nextInt(FAKE_NAMES.length)]
-        );
-        return new FakeNpc(NEXT_ENTITY_ID.getAndIncrement(), location, profile);
+        String randomName = FAKE_NAMES[RANDOM.nextInt(FAKE_NAMES.length)];
+        WrappedGameProfile profile = new WrappedGameProfile(profileId, randomName);
+
+        return new FakeNpc(NEXT_ENTITY_ID.getAndIncrement(), location, profile, profileId, randomName);
     }
 
     private boolean spawnNpc(Player player, FakeNpc npc) {
@@ -152,7 +149,6 @@ public class Tracers implements Listener {
                 try {
                     PROTOCOL.sendServerPacket(player, createPlayerInfoRemove(npc));
                 } catch (RuntimeException ignored) {
-                    // The entity is removed at the next batch even if the tab cleanup fails.
                 }
             }
         }, 5L);
@@ -195,19 +191,53 @@ public class Tracers implements Listener {
                 && player.getEyeLocation().getDirection().angle(toNpc) < Math.toRadians(1.0D);
     }
 
+    // =====================================================================
+    // FIX SUPREM: Injectăm EnumSet direct în obiectul NMS pentru a ocoli Bug-ul ProtocolLib
+    // =====================================================================
     private PacketContainer createPlayerInfoAdd(FakeNpc npc) {
         PacketContainer packet = PROTOCOL.createPacket(PacketType.Play.Server.PLAYER_INFO);
         packet.getModifier().writeDefaults();
-        packet.getPlayerInfoActions().write(0, EnumSet.of(
-                EnumWrappers.PlayerInfoAction.ADD_PLAYER,
-                EnumWrappers.PlayerInfoAction.UPDATE_GAME_MODE,
-                EnumWrappers.PlayerInfoAction.UPDATE_LISTED,
-                EnumWrappers.PlayerInfoAction.UPDATE_DISPLAY_NAME
-        ));
+
+        try {
+            // Extragem obiectul original (NMS) înainte ca ProtocolLib să-l modifice
+            Object nmsPacket = packet.getHandle();
+
+            for (java.lang.reflect.Field field : nmsPacket.getClass().getDeclaredFields()) {
+                if (field.getType().equals(EnumSet.class)) {
+                    field.setAccessible(true);
+
+                    // Extragem clasa Enum nativă
+                    java.lang.reflect.ParameterizedType pType = (java.lang.reflect.ParameterizedType) field.getGenericType();
+                    @SuppressWarnings("rawtypes")
+                    Class<Enum> enumClass = (Class<Enum>) pType.getActualTypeArguments()[0];
+                    Object[] constants = enumClass.getEnumConstants();
+
+                    if (constants.length >= 6) {
+                        // Construim EnumSet-ul. Indecșii reprezintă:
+                        // [0] = ADD_PLAYER, [2] = UPDATE_GAME_MODE, [3] = UPDATE_LISTED, [5] = UPDATE_DISPLAY_NAME
+                        @SuppressWarnings({"unchecked", "rawtypes"})
+                        EnumSet actions = EnumSet.of(
+                                (Enum) constants[0],
+                                (Enum) constants[2],
+                                (Enum) constants[3],
+                                (Enum) constants[5]
+                        );
+
+                        // Injectăm valorile manual! Ocolim StructureModifier-ul ProtocolLib complet.
+                        field.set(nmsPacket, actions);
+                    }
+                    break;
+                }
+            }
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+
         packet.getPlayerInfoDataLists().write(0, Collections.singletonList(new PlayerInfoData(
-                npc.profile.getUUID(), 0, true, EnumWrappers.NativeGameMode.SURVIVAL,
-                npc.profile, WrappedChatComponent.fromText(npc.profile.getName()), true, 0, null
+                npc.uuid, 0, true, EnumWrappers.NativeGameMode.SURVIVAL,
+                npc.profile, WrappedChatComponent.fromText(npc.name), true, 0, null
         )));
+
         return packet;
     }
 
@@ -215,7 +245,7 @@ public class Tracers implements Listener {
         PacketContainer packet = PROTOCOL.createPacket(PacketType.Play.Server.SPAWN_ENTITY);
         packet.getModifier().writeDefaults();
         packet.getIntegers().write(0, npc.entityId);
-        packet.getUUIDs().write(0, npc.profile.getUUID());
+        packet.getUUIDs().write(0, npc.uuid);
         packet.getEntityTypeModifier().write(0, EntityType.PLAYER);
         packet.getDoubles().write(0, npc.location.getX()).write(1, npc.location.getY()).write(2, npc.location.getZ());
         packet.getBytes().write(0, angleToByte(npc.location.getPitch()))
@@ -231,7 +261,6 @@ public class Tracers implements Listener {
         packet.getModifier().writeDefaults();
         packet.getIntegers().write(0, npc.entityId);
 
-        // Entity metadata index 0 is the entity-flags byte. Bit 0x20 = invisible.
         WrappedDataValue flags = new WrappedDataValue(
                 0, WrappedDataWatcher.Registry.get(Byte.class, false), (byte) 0x20
         );
@@ -250,7 +279,7 @@ public class Tracers implements Listener {
     private static PacketContainer createPlayerInfoRemove(FakeNpc npc) {
         PacketContainer packet = PROTOCOL.createPacket(PacketType.Play.Server.PLAYER_INFO_REMOVE);
         packet.getModifier().writeDefaults();
-        packet.getUUIDLists().write(0, Collections.singletonList(npc.profile.getUUID()));
+        packet.getUUIDLists().write(0, Collections.singletonList(npc.uuid));
         return packet;
     }
 
@@ -277,7 +306,6 @@ public class Tracers implements Listener {
                 PROTOCOL.sendServerPacket(player, createEntityDestroy(npc));
                 PROTOCOL.sendServerPacket(player, createPlayerInfoRemove(npc));
             } catch (RuntimeException ignored) {
-                // Continue removing the rest of the batch.
             }
         }
     }
@@ -289,7 +317,6 @@ public class Tracers implements Listener {
     }
 
     public static void cleanupAllDecoys() {
-        // Called by dakotaAC#onDisable before ProtocolLib unregisters this plugin.
         for (Map.Entry<UUID, List<FakeNpc>> entry : new HashMap<>(fakeNpcs).entrySet()) {
             Player player = Bukkit.getPlayer(entry.getKey());
             if (player == null || !player.isOnline()) {
@@ -301,7 +328,6 @@ public class Tracers implements Listener {
                     PROTOCOL.sendServerPacket(player, createEntityDestroy(npc));
                     PROTOCOL.sendServerPacket(player, createPlayerInfoRemove(npc));
                 } catch (RuntimeException ignored) {
-                    // The connection may already be closing during shutdown.
                 }
             }
         }
@@ -314,11 +340,15 @@ public class Tracers implements Listener {
         private final int entityId;
         private final Location location;
         private final WrappedGameProfile profile;
+        private final UUID uuid;
+        private final String name;
 
-        private FakeNpc(int entityId, Location location, WrappedGameProfile profile) {
+        private FakeNpc(int entityId, Location location, WrappedGameProfile profile, UUID uuid, String name) {
             this.entityId = entityId;
             this.location = location;
             this.profile = profile;
+            this.uuid = uuid;
+            this.name = name;
         }
     }
 }
