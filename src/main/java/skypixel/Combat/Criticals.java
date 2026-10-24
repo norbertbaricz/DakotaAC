@@ -1,11 +1,15 @@
 package skypixel.Combat;
 
+import skypixel.compat.PacketAccess;
+import skypixel.compat.Diagnostics;
+import skypixel.config.CheckPolicy;
+import skypixel.config.Lang;
+import skypixel.config.Option;
+
 import com.comphenix.protocol.PacketType;
 import com.comphenix.protocol.ProtocolLibrary;
-import com.comphenix.protocol.events.PacketAdapter;
+import skypixel.compat.CompatibleAdapter;
 import com.comphenix.protocol.events.PacketEvent;
-import com.comphenix.protocol.wrappers.EnumWrappers;
-import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
@@ -17,24 +21,34 @@ import skypixel.dakotaAC;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
+/** Original detection formulas; annotated defaults below are loaded from Modules.Criticals. */
 public class Criticals implements Listener {
 
-    // Memorie precisă asincronă pentru fiecare jucător
+    @Option(value = "zero-vertical-tolerance", min = 0.0, max = 1.0E9)
+    private static volatile double ZERO_VERTICAL_TOLERANCE = 0.0001;
+    @Option(value = "min-vanilla-jump", min = 0.0, max = 1.0E9)
+    private static volatile double MIN_VANILLA_JUMP = 0.41;
+    @Option(value = "micro-jump-max-ticks", min = 1.0, max = 1.0E9)
+    private static volatile int MICRO_JUMP_MAX_TICKS = 2;
+    @Option(value = "min-jump-cycle-ms", min = 1.0, max = 1.0E9)
+    private static volatile long MIN_JUMP_CYCLE_MS = 50L;
+
     private final ConcurrentHashMap<UUID, Double> lastYMap = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<UUID, Double> deltaYMap = new ConcurrentHashMap<>();
-    private final ConcurrentHashMap<UUID, Double> lastDeltaYMap = new ConcurrentHashMap<>(); // Urmărim curba precedentă a săriturii
+    private final ConcurrentHashMap<UUID, Double> lastDeltaYMap = new ConcurrentHashMap<>(); 
     private final ConcurrentHashMap<UUID, Boolean> onGroundMap = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<UUID, Integer> airTicksMap = new ConcurrentHashMap<>();
-    private final ConcurrentHashMap<UUID, Long> lastGroundTimeMap = new ConcurrentHashMap<>(); // Pentru a prinde Timer / Blink
+    private final ConcurrentHashMap<UUID, Long> lastGroundTimeMap = new ConcurrentHashMap<>(); 
 
     public Criticals() {
         ProtocolLibrary.getProtocolManager().addPacketListener(
-                new PacketAdapter(dakotaAC.getInstance(),
+                new CompatibleAdapter(dakotaAC.getInstance(),
                         com.comphenix.protocol.events.ListenerPriority.NORMAL,
                         PacketType.Play.Client.USE_ENTITY,
                         PacketType.Play.Client.POSITION,
                         PacketType.Play.Client.POSITION_LOOK,
-                        PacketType.Play.Client.LOOK) {
+                        PacketType.Play.Client.LOOK,
+                        PacketType.Play.Client.FLYING) {
 
                     @Override
                     public void onPacketReceiving(PacketEvent event) {
@@ -42,16 +56,18 @@ public class Criticals implements Listener {
                             if (!dakotaAC.isCheckActive("Criticals")) return;
 
                             Player player = event.getPlayer();
+                            if (player != null && CheckPolicy.exempt(player, "Criticals")) return;
                             if (player == null) return;
                             UUID uuid = player.getUniqueId();
                             PacketType type = event.getPacketType();
 
-                            // ==========================================
-                            // 1. ANALIZA ATACULUI (USE_ENTITY)
-                            // ==========================================
-                            if (type == PacketType.Play.Client.USE_ENTITY) {
-                                EnumWrappers.EntityUseAction action = event.getPacket().getEnumEntityUseActions().readSafely(0).getAction();
-                                if (action != EnumWrappers.EntityUseAction.ATTACK) return;
+                            if (PacketAccess.isUseEntity(type)) {
+                                if (!PacketAccess.isAttack(event)) return;
+                                if (player.isInWater() || player.getVehicle() != null || player.isGliding()
+                                        || player.getAllowFlight() || player.isClimbing()
+                                        || player.hasPotionEffect(PotionEffectType.JUMP_BOOST)
+                                        || player.hasPotionEffect(PotionEffectType.LEVITATION)
+                                        || player.getLocation().getBlock().getType().name().contains("COBWEB")) return;
 
                                 Double dY = deltaYMap.get(uuid);
                                 Double lastDY = lastDeltaYMap.get(uuid);
@@ -59,10 +75,8 @@ public class Criticals implements Listener {
                                 Integer ticks = airTicksMap.get(uuid);
                                 Long lastGroundTime = lastGroundTimeMap.get(uuid);
 
-                                // Dacă nu avem destule date încă, îl lăsăm (previne erori la conectare)
                                 if (dY == null || og == null || ticks == null || lastGroundTime == null) return;
 
-                                // Dacă e pe pământ, nu poate da critice Vanilla, deci îl ignorăm
                                 if (og) return;
 
                                 boolean isFlagged = false;
@@ -70,34 +84,29 @@ public class Criticals implements Listener {
 
                                 long timeInAir = System.currentTimeMillis() - lastGroundTime;
 
-                                // --- LOGICA SUPREMĂ PENTRU LIQUIDBOUNCE ---
-
-                                // 1. Ground Spoof / NoGround Mode (Zboară dar stă pe loc vertical)
-                                if (Math.abs(dY) < 0.0001 && ticks > 0) {
+                                if (Math.abs(dY) < ZERO_VERTICAL_TOLERANCE && ticks > 0) {
                                     isFlagged = true;
-                                    flagReason = "Zero vertical velocity mid-air (NoGround).";
-                                }
-                                // 2. Packet Mode (Săritură ireală din pachete. Saltul Vanilla pur are minim +0.41)
-                                else if (dY > 0.0 && dY < 0.41 && ticks <= 2) {
-                                    isFlagged = true;
-                                    flagReason = "Impossible micro-jump detected (Y: " + String.format("%.4f", dY) + ").";
-                                }
-                                // 3. Blink / Timer Mode (Trimit toate pachetele instantaneu)
-                                // Jucătorul "cade" spre inamic (dY < 0), dar el a părăsit pământul abia de 50 milisecunde!
-                                else if (dY < 0.0 && lastDY != null && lastDY > 0.0 && timeInAir < 50) {
-                                    isFlagged = true;
-                                    flagReason = "Packet Burst (Blink/Timer) - Jump cycle completed in " + timeInAir + "ms.";
+                                    flagReason = Lang.text("checks.Criticals.details-zero-vertical-velocity-mid-air-noground");
                                 }
 
-                                // EXECUTAREA PEDEPSEI
+                                else if (dY > 0.0 && dY < MIN_VANILLA_JUMP && ticks <= MICRO_JUMP_MAX_TICKS) {
+                                    isFlagged = true;
+                                    flagReason = Lang.text("checks.Criticals.details-impossible-micro-jump-detected-y", "d-y", String.format(java.util.Locale.ROOT, "%.4f", dY));
+                                }
+
+                                else if (dY < 0.0 && lastDY != null && lastDY > 0.0 && timeInAir < MIN_JUMP_CYCLE_MS) {
+                                    isFlagged = true;
+                                    flagReason = Lang.text("checks.Criticals.details-packet-burst-blink-timer-jump-cycle-completed-in", "time-in-air", timeInAir);
+                                }
+
                                 if (isFlagged) {
-                                    // Anulăm pachetul asincron. Atacul fals nu face deloc damage!
-                                    event.setCancelled(true);
+
+                                    if (CheckPolicy.cancel("Criticals")) event.setCancelled(true);
                                     final String finalReason = flagReason;
 
-                                    Bukkit.getScheduler().runTask(dakotaAC.getInstance(), () -> {
+                                    Diagnostics.sync(() -> {
                                         if (player.isOnline() && !player.isDead()) {
-                                            // Filtre Vanilla (Apă, Elytra, Scări, Poțiuni)
+
                                             if (player.isInWater() || player.getVehicle() != null || player.isGliding() ||
                                                     player.getAllowFlight() || player.isClimbing() ||
                                                     player.hasPotionEffect(PotionEffectType.JUMP_BOOST) ||
@@ -105,21 +114,18 @@ public class Criticals implements Listener {
                                                 return;
                                             }
 
-                                            // Previne alarmele false dacă este în pânze de păianjen
                                             if (player.getLocation().getBlock().getType().name().contains("COBWEB")) {
                                                 return;
                                             }
 
-                                            flagPlayer.addFlag(player, "Criticals", finalReason);
+                                            flagPlayer.addFlag(player, "Criticals", Lang.text("checks.Criticals.name-criticals"), finalReason);
                                         }
                                     });
                                 }
                             }
-                            // ==========================================
-                            // 2. ACTUALIZAREA TRACKER-ULUI GEOMETRIC
-                            // ==========================================
+
                             else {
-                                boolean onGround = event.getPacket().getBooleans().readSafely(0);
+                                boolean onGround = PacketAccess.onGround(event.getPacket());
                                 onGroundMap.put(uuid, onGround);
 
                                 if (onGround) {
@@ -130,14 +136,13 @@ public class Criticals implements Listener {
                                 }
 
                                 if (type == PacketType.Play.Client.POSITION || type == PacketType.Play.Client.POSITION_LOOK) {
-                                    double y = event.getPacket().getDoubles().readSafely(1);
+                                    double y = PacketAccess.coordinate(event.getPacket(), 1);
                                     Double prevY = lastYMap.get(uuid);
 
                                     if (prevY != null) {
                                         double currentDelta = y - prevY;
                                         Double prevDelta = deltaYMap.getOrDefault(uuid, 0.0);
 
-                                        // Salvăm cu un pas în spate pentru a analiza curba săriturii
                                         lastDeltaYMap.put(uuid, prevDelta);
                                         deltaYMap.put(uuid, currentDelta);
                                     }
@@ -145,9 +150,7 @@ public class Criticals implements Listener {
                                 }
                             }
 
-                        } catch (Exception ex) {
-                            // Ignorăm silențios pachetele corupte trimise intenționat de "Crash Exploits"
-                        }
+                        } catch (Exception | LinkageError ex) { Diagnostics.report("Criticals", ex); }
                     }
                 }
         );

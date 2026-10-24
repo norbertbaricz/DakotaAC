@@ -1,5 +1,10 @@
 package skypixel.Player;
 
+import skypixel.compat.Diagnostics;
+import skypixel.config.CheckPolicy;
+import skypixel.config.Lang;
+import skypixel.config.Option;
+
 import com.comphenix.protocol.ProtocolLibrary;
 import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
@@ -11,33 +16,26 @@ import org.bukkit.plugin.messaging.PluginMessageListener;
 import skypixel.Notification.flagPlayer;
 import skypixel.dakotaAC;
 
-import java.nio.charset.StandardCharsets;
-import java.util.Arrays;
-import java.util.List;
+import java.util.UUID;
 
+/** Original detection formulas; annotated defaults below are loaded from Modules.Version. */
 public class Version implements Listener, PluginMessageListener {
 
-    // ==========================================
-    // SETĂRI UȘOR DE MODIFICAT (Easy to Tune)
-    // ==========================================
+    @Option(value = "join-sample-delay-ticks", min = 1.0, max = 1.0E9)
+    private static volatile long JOIN_SAMPLE_DELAY_TICKS = 20L;
 
-    // Versiunea minimă de protocol acceptată fără a da alertă
-    // 754 = 1.16.5 | 763 = 1.20.1 | 47 = 1.8.x
-    private static final int MIN_PROTOCOL_VERSION = 754;
+    @Option(value = "min-protocol-version", min = 1.0, max = 1.0E9)
+    private static volatile int MIN_PROTOCOL_VERSION = 754;
 
-    // Lista Albă: Clienți Vanilla sau de PvP legitimi (nu trimitem nicio alertă)
-    private static final List<String> ALLOWED_CLIENTS = Arrays.asList(
+    @Option("allowed-clients")
+    private static volatile String[] ALLOWED_CLIENTS = {
             "vanilla", "lunar", "feather", "badlion", "optifine", "labymod", "geyser", "salwyrr", "aries"
-    );
+    };
 
-    // Lista Gri: Modloadere (trimitem alertă informativă, deoarece pot avea și mod-uri ilegale)
-    private static final List<String> MOD_LOADERS = Arrays.asList(
+    @Option("mod-loaders")
+    private static volatile String[] MOD_LOADERS = {
             "forge", "fabric", "quilt", "liteloader", "neoforge"
-    );
-
-    // ==========================================
-    // LOGICA DE BAZĂ
-    // ==========================================
+    };
 
     public Version() {
         Bukkit.getMessenger().registerIncomingPluginChannel(dakotaAC.getPlugin(dakotaAC.class), "minecraft:brand", this);
@@ -49,77 +47,68 @@ public class Version implements Listener, PluginMessageListener {
 
         if (channel.equals("minecraft:brand")) {
             try {
-                // Clientul trimite brand-ul ca un array de biți. Convertim în text și curățăm caracterele.
-                String brand = new String(message, StandardCharsets.UTF_8).replaceAll("[^a-zA-Z0-9_-]", "").toLowerCase();
+
+                String brand = skypixel.compat.BrandReader.decode(message);
 
                 checkClientBrand(player, brand);
 
-            } catch (Exception ex) {
-                ex.printStackTrace();
+            } catch (Exception | LinkageError ex) {
+                Diagnostics.report("Version", ex);
             }
         }
     }
 
     private void checkClientBrand(Player player, String brand) {
-        // 1. Verificăm Lista Albă
+
         for (String allowed : ALLOWED_CLIENTS) {
             if (brand.contains(allowed)) {
-                return; // E curat, nu trimitem nimic
+                return; 
             }
         }
 
-        // 2. Verificăm Lista Gri
         for (String loader : MOD_LOADERS) {
             if (brand.contains(loader)) {
-                Bukkit.getScheduler().runTask(dakotaAC.getPlugin(dakotaAC.class), () -> {
+                Diagnostics.sync(() -> {
                     if (player.isOnline()) {
-                        flagPlayer.addFlag(player, "Version (Modded)", "Playing on a modloader (" + brand + "). Possible illegal mods.");
+                        flagPlayer.addFlag(player, "Version", Lang.text("checks.Version.name-version-modded"), Lang.text("checks.Version.details-playing-on-a-modloader-possible-illegal-mods", "brand", brand));
                     }
                 });
                 return;
             }
         }
 
-        // 3. Dacă nu e nici în Lista Albă, nici în Lista Gri, intră în Lista Neagră (Suspect)
-        Bukkit.getScheduler().runTask(dakotaAC.getPlugin(dakotaAC.class), () -> {
+        Diagnostics.sync(() -> {
             if (player.isOnline()) {
-                flagPlayer.addFlag(player, "Version (Suspicious)", "Unknown or unapproved client detected: " + brand);
+                flagPlayer.addFlag(player, "Version", Lang.text("checks.Version.name-version-suspicious"), Lang.text("checks.Version.details-unknown-or-unapproved-client-detected", "brand", brand));
             }
         });
     }
 
-    // ==========================================================
-    // DETECȚIE VERSIUNE MINECRAFT (PROTOCOL)
-    // ==========================================================
-
     @EventHandler(priority = EventPriority.MONITOR)
     public void onPlayerJoin(PlayerJoinEvent event) {
         Player player = event.getPlayer();
+        if (player != null && CheckPolicy.exempt(player, "Version")) return;
 
-        // Lăsăm un delay mic ca ProtocolLib și ViaVersion să termine handshake-ul
         Bukkit.getScheduler().runTaskLater(dakotaAC.getPlugin(dakotaAC.class), () -> {
-            if (!player.isOnline()) return;
+            if (!player.isOnline() || !dakotaAC.isCheckActive("Version")) return;
 
             int protocolVersion = -1;
 
-            // 1. Încercăm să obținem versiunea reală din ViaVersion (Cea mai precisă metodă)
             if (Bukkit.getPluginManager().getPlugin("ViaVersion") != null) {
                 try {
-                    protocolVersion = com.viaversion.viaversion.api.Via.getAPI().getPlayerVersion(player.getUniqueId());
-                } catch (Exception e) {
-                    // Prevenim erorile dacă API-ul ViaVersion e diferit/vechi
-                }
+                    Class<?> via = Class.forName("com.viaversion.viaversion.api.Via");
+                    Object api = via.getMethod("getAPI").invoke(null);
+                    protocolVersion = (int) Class.forName("com.viaversion.viaversion.api.ViaAPI").getMethod("getPlayerVersion", UUID.class).invoke(api, player.getUniqueId());
+                } catch (Exception | LinkageError e) { Diagnostics.report("Version", e); }
             }
 
-            // 2. Fallback: Dacă ViaVersion nu e instalat sau a dat eroare, folosim ProtocolLib
             if (protocolVersion == -1) {
                 protocolVersion = ProtocolLibrary.getProtocolManager().getProtocolVersion(player);
             }
 
-            // Folosim constanta din secțiunea "Easy to Tune"
             if (protocolVersion < MIN_PROTOCOL_VERSION) {
-                flagPlayer.addFlag(player, "Version", "Joined using an outdated version (Protocol: " + protocolVersion + "). AC checks might be unstable.");
+                flagPlayer.addFlag(player, "Version", Lang.text("checks.Version.name-version"), Lang.text("checks.Version.details-joined-using-an-outdated-version-protocol-ac-checks", "protocol-version", protocolVersion));
             }
-        }, 20L); // 1 secundă după conectare
+        }, JOIN_SAMPLE_DELAY_TICKS); 
     }
 }

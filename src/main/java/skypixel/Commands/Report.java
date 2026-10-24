@@ -1,7 +1,6 @@
 package skypixel.Commands;
 
 import org.bukkit.Bukkit;
-import org.bukkit.ChatColor;
 import org.bukkit.Material;
 import org.bukkit.NamespacedKey;
 import org.bukkit.OfflinePlayer;
@@ -16,202 +15,120 @@ import org.bukkit.inventory.meta.BookMeta;
 import org.bukkit.persistence.PersistentDataContainer;
 import org.bukkit.persistence.PersistentDataType;
 import skypixel.Misc.AntiBot;
+import skypixel.config.Lang;
+import skypixel.config.Option;
 import skypixel.dakotaAC;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
 public class Report implements CommandExecutor, TabCompleter {
-
-    // ==========================================
-    // SETĂRI UȘOR DE REGLAT
-    // ==========================================
-    private final String PREFIX = ChatColor.translateAlternateColorCodes('&', "&8[&cDakotaAC&8] &7");
-    private final int REPORTS_NEEDED_FOR_ANTIBOT = 3;
-    private final long REPORT_COOLDOWN_MS = 60000L;
-    // ==========================================
-
-    private final ConcurrentHashMap<UUID, Long> cooldowns = new ConcurrentHashMap<>();
+    // Preserve the report database in the first world's persistent data container.
+    @Option(value = "reports-needed-for-antibot", min = 1, max = 1000000)
+    private static volatile int REPORTS_NEEDED_FOR_ANTIBOT = 3;
+    @Option(value = "report-cooldown-ms", min = 0, max = 86400000)
+    private static volatile long REPORT_COOLDOWN_MS = 60000L;
+    @Option(value = "players-per-book-page", min = 1, max = 5)
+    private static volatile int PLAYERS_PER_BOOK_PAGE = 3;
+    @Option(value = "max-book-pages", min = 1, max = 100)
+    private static volatile int MAX_BOOK_PAGES = 100;
+    private final Map<UUID, Long> cooldowns = new ConcurrentHashMap<>();
 
     @Override
-    public boolean onCommand(CommandSender sender, Command cmd, String label, String[] args) {
+    public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
         if (args.length == 0) {
-            String helpMsg = ChatColor.RED + "Usage: /report <player>";
-            if (sender.hasPermission("dakotaac.admin")) {
-                helpMsg += " or /report info";
-            }
-            sender.sendMessage(helpMsg);
+            sender.sendMessage(Lang.text(dakotaAC.isAdmin(sender) ? "reports.admin-usage" : "reports.usage"));
             return true;
         }
-
-        // Dacă argumentul este "info", deschidem cartea cu baza de date (Doar Admini)
-        if (args[0].equalsIgnoreCase("info")) {
-            return handleInfo(sender);
-        }
-
-        // Altfel, tratăm argumentul ca pe numele unui jucător și procesăm report-ul
-        return handleReport(sender, args[0]);
+        return args[0].equalsIgnoreCase("info") ? handleInfo(sender) : handleReport(sender, args[0]);
     }
 
-    // =========================================================
-    // LOGICA PENTRU RAPORTAREA UNUI JUCĂTOR: /report <player>
-    // =========================================================
     private boolean handleReport(CommandSender sender, String targetName) {
-        Player target = Bukkit.getPlayer(targetName);
-
-        if (target == null) {
-            sender.sendMessage(ChatColor.RED + "That player is not online!");
-            return true;
-        }
-
-        if (sender instanceof Player) {
-            Player pSender = (Player) sender;
-
-            if (target.equals(pSender)) {
-                pSender.sendMessage(ChatColor.RED + "You cannot report yourself!");
+        Player target = Bukkit.getPlayerExact(targetName);
+        if (target == null) { sender.sendMessage(Lang.text("reports.not-online")); return true; }
+        long now = System.currentTimeMillis();
+        cooldowns.entrySet().removeIf(entry -> now - entry.getValue() >= REPORT_COOLDOWN_MS || Bukkit.getPlayer(entry.getKey()) == null);
+        if (sender instanceof Player player) {
+            if (target.equals(player)) { player.sendMessage(Lang.text("reports.self")); return true; }
+            long remaining = REPORT_COOLDOWN_MS - (now - cooldowns.getOrDefault(player.getUniqueId(), 0L));
+            if (remaining > 0) {
+                player.sendMessage(Lang.text("reports.cooldown", "seconds", (remaining + 999L) / 1000L));
                 return true;
             }
-
-            long lastReport = cooldowns.getOrDefault(pSender.getUniqueId(), 0L);
-            if (System.currentTimeMillis() - lastReport < REPORT_COOLDOWN_MS) {
-                long timeLeft = (REPORT_COOLDOWN_MS - (System.currentTimeMillis() - lastReport)) / 1000;
-                pSender.sendMessage(ChatColor.RED + "Please wait " + timeLeft + " seconds before reporting again.");
-                return true;
-            }
-            cooldowns.put(pSender.getUniqueId(), System.currentTimeMillis());
+            cooldowns.put(player.getUniqueId(), now);
         }
-
-        UUID targetUUID = target.getUniqueId();
         World world = Bukkit.getWorlds().get(0);
-        PersistentDataContainer pdc = world.getPersistentDataContainer();
-        NamespacedKey key = new NamespacedKey(dakotaAC.getPlugin(dakotaAC.class), targetUUID.toString().toLowerCase());
-
-        int currentReports = pdc.getOrDefault(key, PersistentDataType.INTEGER, 0) + 1;
-        pdc.set(key, PersistentDataType.INTEGER, currentReports);
-
-        String reporterName = sender.getName();
-        for (Player p : Bukkit.getOnlinePlayers()) {
-            if (p.hasPermission("dakotaac.admin")) {
-                p.sendMessage(PREFIX + ChatColor.YELLOW + reporterName + ChatColor.GRAY + " has reported "
-                        + ChatColor.RED + target.getName() + ChatColor.GRAY + "!");
-                p.sendMessage(PREFIX + "Total reports for this player: " + ChatColor.RED + currentReports);
-            }
+        PersistentDataContainer database = world.getPersistentDataContainer();
+        NamespacedKey key = new NamespacedKey(dakotaAC.getInstance(), target.getUniqueId().toString());
+        int before = database.getOrDefault(key, PersistentDataType.INTEGER, 0);
+        int count = before == Integer.MAX_VALUE ? before : before + 1;
+        database.set(key, PersistentDataType.INTEGER, count);
+        for (Player staff : Bukkit.getOnlinePlayers()) {
+            if (!dakotaAC.isAdmin(staff)) continue;
+            staff.sendMessage(Lang.text("reports.staff", "reporter", sender.getName(), "player", target.getName()));
+            staff.sendMessage(Lang.text("reports.total", "count", count));
         }
-
-        sender.sendMessage(ChatColor.GREEN + "Your report has been sent to the online staff!");
-
-        if (currentReports > 0 && currentReports % REPORTS_NEEDED_FOR_ANTIBOT == 0) {
-            for (Player p : Bukkit.getOnlinePlayers()) {
-                if (p.hasPermission("dakotaac.admin")) {
-                    p.sendMessage(PREFIX + ChatColor.DARK_RED + "⚠ " + ChatColor.RED + target.getName()
-                            + " has accumulated " + currentReports + " total reports! Triggering AntiBot module...");
-                }
+        sender.sendMessage(Lang.text("reports.sent"));
+        if (count > 0 && count % REPORTS_NEEDED_FOR_ANTIBOT == 0 && dakotaAC.isCheckActive("AntiBot")) {
+            for (Player staff : Bukkit.getOnlinePlayers()) {
+                if (dakotaAC.isAdmin(staff)) staff.sendMessage(Lang.text("reports.antibot", "player", target.getName(), "count", count));
             }
             AntiBot.executeReportCheck(target);
         }
-
         return true;
     }
 
-    // =========================================================
-    // LOGICA PENTRU DESCHIDEREA CĂRȚII: /report info
-    // =========================================================
     private boolean handleInfo(CommandSender sender) {
-        if (!(sender instanceof Player)) {
-            sender.sendMessage(color("&cOnly players can open the report book!"));
-            return true;
-        }
-
-        Player player = (Player) sender;
-
-        if (!player.hasPermission("dakotaac.admin")) {
-            player.sendMessage(color("&cYou do not have permission to view reports."));
-            return true;
-        }
-
-        World world = Bukkit.getWorlds().get(0);
-        PersistentDataContainer pdc = world.getPersistentDataContainer();
-
+        if (!(sender instanceof Player player)) { sender.sendMessage(Lang.text("reports.only-player")); return true; }
+        if (!dakotaAC.isAdmin(player)) { player.sendMessage(Lang.text("reports.no-permission")); return true; }
+        PersistentDataContainer database = Bukkit.getWorlds().get(0).getPersistentDataContainer();
         ItemStack book = new ItemStack(Material.WRITTEN_BOOK);
         BookMeta meta = (BookMeta) book.getItemMeta();
-        meta.setTitle(color("&cReport Database"));
-        meta.setAuthor("DakotaAC");
-
-        StringBuilder page = new StringBuilder();
-        addHeader(page);
-
-        int playersOnPage = 0;
-        boolean hasReports = false;
-
-        for (NamespacedKey key : pdc.getKeys()) {
-            if (key.getNamespace().equals("dakotaac")) {
-                hasReports = true;
-
-                UUID targetUUID = UUID.fromString(key.getKey());
-                OfflinePlayer target = Bukkit.getOfflinePlayer(targetUUID);
-                String name = target.getName() != null ? target.getName() : "Unknown";
-                int count = pdc.get(key, PersistentDataType.INTEGER);
-
-                page.append(color("&8» &0&l" + name + "\n"));
-                page.append(color("   &8➥ &7Reports: &c" + count + "\n\n"));
-
-                playersOnPage++;
-
-                if (playersOnPage == 3) {
-                    meta.addPage(page.toString());
-                    page = new StringBuilder();
-                    addHeader(page);
-                    playersOnPage = 0;
-                }
+        if (meta == null) return true;
+        meta.setTitle(Lang.text("reports.book-title"));
+        meta.setAuthor(Lang.text("reports.book-author"));
+        StringBuilder page = new StringBuilder(Lang.text("reports.book-header"));
+        int entries = 0;
+        boolean found = false;
+        // Sorting gives stable pages while ignoring unrelated plugin data in the same namespace.
+        List<NamespacedKey> keys = database.getKeys().stream().sorted(java.util.Comparator.comparing(NamespacedKey::toString)).toList();
+        for (NamespacedKey key : keys) {
+            if (!key.getNamespace().equals("dakotaac") || !database.has(key, PersistentDataType.INTEGER)) continue;
+            UUID uuid;
+            try { uuid = UUID.fromString(key.getKey()); } catch (IllegalArgumentException ignored) { continue; }
+            Integer count = database.get(key, PersistentDataType.INTEGER);
+            if (count == null || count < 1) continue;
+            OfflinePlayer target = Bukkit.getOfflinePlayer(uuid);
+            String name = target.getName() == null ? Lang.text("reports.unknown-player") : target.getName();
+            if (meta.getPageCount() >= MAX_BOOK_PAGES) break;
+            page.append(Lang.text("reports.book-entry", "name", name, "count", count));
+            found = true;
+            if (++entries == PLAYERS_PER_BOOK_PAGE) {
+                meta.addPage(page.toString());
+                page = new StringBuilder(Lang.text("reports.book-header"));
+                entries = 0;
             }
         }
-
-        if (!hasReports) {
-            player.sendMessage(color("&8[&cDakotaAC&8] &aThere are currently no reports in the database."));
-            return true;
-        }
-
-        if (playersOnPage > 0) {
-            meta.addPage(page.toString());
-        }
-
+        if (!found) { player.sendMessage(Lang.text("reports.empty")); return true; }
+        if (entries > 0 && meta.getPageCount() < MAX_BOOK_PAGES) meta.addPage(page.toString());
         book.setItemMeta(meta);
         player.openBook(book);
-
         return true;
     }
 
-    private void addHeader(StringBuilder page) {
-        page.append(color("&0&lDAKOTA AC\n"));
-        page.append(color("&8Report Database\n"));
-        page.append(color("&8&m===================\n\n"));
-    }
-
-    private String color(String text) {
-        return ChatColor.translateAlternateColorCodes('&', text);
-    }
-
-    // =========================================================
-    // AUTO-COMPLETARE PENTRU TASTA TAB (TabCompleter)
-    // =========================================================
     @Override
-    public List<String> onTabComplete(CommandSender sender, Command cmd, String label, String[] args) {
-        List<String> completions = new ArrayList<>();
-
-        if (args.length == 1) {
-            // Dacă e admin, îi sugerăm și "info"
-            if (sender.hasPermission("dakotaac.admin") && "info".startsWith(args[0].toLowerCase())) {
-                completions.add("info");
-            }
-            // Sugerăm numele jucătorilor online
-            for (Player p : Bukkit.getOnlinePlayers()) {
-                if (p.getName().toLowerCase().startsWith(args[0].toLowerCase())) {
-                    completions.add(p.getName());
-                }
-            }
+    public List<String> onTabComplete(CommandSender sender, Command command, String label, String[] args) {
+        if (args.length != 1) return List.of();
+        List<String> suggestions = new ArrayList<>();
+        String prefix = args[0].toLowerCase(Locale.ROOT);
+        if (dakotaAC.isAdmin(sender) && "info".startsWith(prefix)) suggestions.add("info");
+        for (Player player : Bukkit.getOnlinePlayers()) {
+            if (player.getName().toLowerCase(Locale.ROOT).startsWith(prefix)) suggestions.add(player.getName());
         }
-        return completions;
+        return suggestions;
     }
 }

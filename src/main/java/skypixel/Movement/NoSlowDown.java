@@ -1,11 +1,15 @@
 package skypixel.Movement;
 
+import skypixel.compat.PacketAccess;
+import skypixel.compat.Diagnostics;
+import skypixel.config.CheckPolicy;
+import skypixel.config.Lang;
+import skypixel.config.Option;
+
 import com.comphenix.protocol.PacketType;
 import com.comphenix.protocol.ProtocolLibrary;
-import com.comphenix.protocol.events.PacketAdapter;
+import skypixel.compat.CompatibleAdapter;
 import com.comphenix.protocol.events.PacketEvent;
-import org.bukkit.Bukkit;
-import org.bukkit.GameMode;
 import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.entity.Player;
@@ -21,23 +25,29 @@ import skypixel.dakotaAC;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
+/** Original detection formulas; annotated defaults below are loaded from Modules.NoSlowDown. */
 public class NoSlowDown implements Listener {
 
-    // ==========================================
-    // SETĂRI UȘOR DE REGLAT (EASY TO TUNE)
-    // ==========================================
-    // Mărit la 8 pentru a absorbi perfect inerția de la încărcarea Tridentului/Arcului
-    private static final int ITEM_SPAM_TOLERANCE_TICKS = 8;
-    private static final double MAX_ITEM_USE_SPEED = 0.16;
-    private static final double MAX_WEB_SPEED = 0.15;
-    // ==========================================
+    @Option(value = "damage-immunity-ticks", min = 1.0, max = 1.0E9)
+    private static volatile int DAMAGE_IMMUNITY_TICKS = 10;
+    @Option(value = "velocity-exemption", min = 0.0, max = 1.0E9)
+    private static volatile double VELOCITY_EXEMPTION = 0.05;
+    @Option(value = "speed-potion-allowance", min = 0.0, max = 1.0E9)
+    private static volatile double SPEED_POTION_ALLOWANCE = 0.05;
+
+    @Option(value = "item-spam-tolerance-ticks", min = 1.0, max = 1.0E9)
+    private static volatile int ITEM_SPAM_TOLERANCE_TICKS = 8;
+    @Option(value = "max-item-use-speed", min = 0.0, max = 1.0E9)
+    private static volatile double MAX_ITEM_USE_SPEED = 0.16;
+    @Option(value = "max-web-speed", min = 0.0, max = 1.0E9)
+    private static volatile double MAX_WEB_SPEED = 0.15;
 
     private final ConcurrentHashMap<UUID, double[]> lastPosMap = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<UUID, Integer> itemVlMap = new ConcurrentHashMap<>();
 
     public NoSlowDown() {
         ProtocolLibrary.getProtocolManager().addPacketListener(
-                new PacketAdapter(dakotaAC.getPlugin(dakotaAC.class),
+                new CompatibleAdapter(dakotaAC.getPlugin(dakotaAC.class),
                         com.comphenix.protocol.events.ListenerPriority.NORMAL,
                         PacketType.Play.Client.POSITION,
                         PacketType.Play.Client.POSITION_LOOK) {
@@ -48,12 +58,13 @@ public class NoSlowDown implements Listener {
                             if (!dakotaAC.isCheckActive("NoSlowDown")) return;
 
                             Player player = event.getPlayer();
+                            if (player != null && CheckPolicy.exempt(player, "NoSlowDown")) return;
                             if (player == null) return;
                             UUID uuid = player.getUniqueId();
 
-                            double toX = event.getPacket().getDoubles().readSafely(0);
-                            double toY = event.getPacket().getDoubles().readSafely(1);
-                            double toZ = event.getPacket().getDoubles().readSafely(2);
+                            double toX = PacketAccess.coordinate(event.getPacket(), 0);
+                            double toY = PacketAccess.coordinate(event.getPacket(), 1);
+                            double toZ = PacketAccess.coordinate(event.getPacket(), 2);
 
                             double[] fromPos = lastPosMap.get(uuid);
 
@@ -76,15 +87,14 @@ public class NoSlowDown implements Listener {
                                 return;
                             }
 
-                            Bukkit.getScheduler().runTask(dakotaAC.getPlugin(dakotaAC.class), () -> {
+                            Diagnostics.sync(() -> {
                                 if (!player.isOnline() || player.isDead()) return;
 
                                 if (player.isInsideVehicle() || player.isGliding() || player.getAllowFlight() || player.isRiptiding()) {
                                     return;
                                 }
 
-                                // === FIX CRITIC: Protecție la Knockback (Pentru Tufișuri și PvP) ===
-                                if (player.getNoDamageTicks() > 10 || Math.hypot(player.getVelocity().getX(), player.getVelocity().getZ()) > 0.05) {
+                                if (player.getNoDamageTicks() > DAMAGE_IMMUNITY_TICKS || Math.hypot(player.getVelocity().getX(), player.getVelocity().getZ()) > VELOCITY_EXEMPTION) {
                                     decreaseVL(uuid);
                                     return;
                                 }
@@ -92,9 +102,6 @@ public class NoSlowDown implements Listener {
                                 Location toLoc = new Location(player.getWorld(), toX, toY, toZ);
                                 Location fromLoc = new Location(player.getWorld(), safeFromPos[0], safeFromPos[1], safeFromPos[2], player.getLocation().getYaw(), player.getLocation().getPitch());
 
-                                // ========================================================
-                                // LOGICA 1: BLOCURI CARE ÎNCETINESC
-                                // ========================================================
                                 Material blockAtFeet = toLoc.getBlock().getType();
                                 Material blockAtHead = toLoc.clone().add(0, 1.0, 0).getBlock().getType();
 
@@ -104,15 +111,12 @@ public class NoSlowDown implements Listener {
 
                                 if (inWeb || inBushOrSnow) {
                                     if (deltaXZ > MAX_WEB_SPEED) {
-                                        flagPlayer.addFlag(player, "NoSlowDown (Web)", "Moving too fast through a slowing block (Speed: " + String.format("%.2f", deltaXZ) + ")");
-                                        player.teleport(fromLoc, PlayerTeleportEvent.TeleportCause.PLUGIN);
+                                        flagPlayer.addFlag(player, "NoSlowDown", Lang.text("checks.NoSlowDown.name-noslowdown-web"), Lang.text("checks.NoSlowDown.details-moving-too-fast-through-a-slowing-block-speed", "delta-x-z", String.format(java.util.Locale.ROOT, "%.2f", deltaXZ)));
+                                        if (CheckPolicy.setbacks("NoSlowDown")) player.teleport(fromLoc, PlayerTeleportEvent.TeleportCause.PLUGIN);
                                         return;
                                     }
                                 }
 
-                                // ========================================================
-                                // LOGICA 2: UTILIZAREA ITEMELOR CU TOLERANȚĂ SPAM/INERȚIE
-                                // ========================================================
                                 boolean isUsingSlowingItem = false;
                                 try {
                                     isUsingSlowingItem = player.isHandRaised() || player.isBlocking();
@@ -125,7 +129,6 @@ public class NoSlowDown implements Listener {
                                     return;
                                 }
 
-                                // Permitem Jump-Eating doar pe urcare (deltaY > 0), nu la coborârea pantelor
                                 if (deltaY > 0.0) {
                                     return;
                                 }
@@ -138,17 +141,16 @@ public class NoSlowDown implements Listener {
                                 double speedLimit = MAX_ITEM_USE_SPEED;
                                 if (player.hasPotionEffect(PotionEffectType.SPEED)) {
                                     int amplifier = player.getPotionEffect(PotionEffectType.SPEED).getAmplifier();
-                                    speedLimit += 0.05 * (amplifier + 1);
+                                    speedLimit += SPEED_POTION_ALLOWANCE * (amplifier + 1);
                                 }
 
                                 if (deltaXZ > speedLimit) {
                                     int vl = itemVlMap.getOrDefault(uuid, 0) + 1;
                                     itemVlMap.put(uuid, vl);
 
-                                    // Lăsăm inerția Tridentului/Mâncării să se descarce natural
                                     if (vl > ITEM_SPAM_TOLERANCE_TICKS) {
-                                        flagPlayer.addFlag(player, "NoSlowDown (Item)", "Sustained speed while using item (Speed: " + String.format("%.2f", deltaXZ) + ")");
-                                        player.teleport(fromLoc, PlayerTeleportEvent.TeleportCause.PLUGIN);
+                                        flagPlayer.addFlag(player, "NoSlowDown", Lang.text("checks.NoSlowDown.name-noslowdown-item"), Lang.text("checks.NoSlowDown.details-sustained-speed-while-using-item-speed", "delta-x-z", String.format(java.util.Locale.ROOT, "%.2f", deltaXZ)));
+                                        if (CheckPolicy.setbacks("NoSlowDown")) player.teleport(fromLoc, PlayerTeleportEvent.TeleportCause.PLUGIN);
                                         itemVlMap.put(uuid, 0);
                                     }
                                 } else {
@@ -156,8 +158,8 @@ public class NoSlowDown implements Listener {
                                 }
                             });
 
-                        } catch (Exception ex) {
-                            ex.printStackTrace();
+                        } catch (Exception | LinkageError ex) {
+                            Diagnostics.report("NoSlowDown", ex);
                         }
                     }
                 }

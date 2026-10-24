@@ -1,21 +1,23 @@
 package skypixel.Render;
 
+import skypixel.compat.PacketAccess;
+import skypixel.compat.Diagnostics;
+import skypixel.config.CheckPolicy;
+import skypixel.config.Lang;
+import skypixel.config.Option;
+
 import com.comphenix.protocol.PacketType;
 import com.comphenix.protocol.ProtocolLibrary;
 import com.comphenix.protocol.ProtocolManager;
-import com.comphenix.protocol.events.PacketAdapter;
+import skypixel.compat.CompatibleAdapter;
 import com.comphenix.protocol.events.PacketContainer;
 import com.comphenix.protocol.events.PacketEvent;
-import com.comphenix.protocol.wrappers.EnumWrappers;
-import com.comphenix.protocol.wrappers.PlayerInfoData;
-import com.comphenix.protocol.wrappers.WrappedChatComponent;
 import com.comphenix.protocol.wrappers.WrappedDataValue;
 import com.comphenix.protocol.wrappers.WrappedDataWatcher;
 import com.comphenix.protocol.wrappers.WrappedGameProfile;
 import org.bukkit.Bukkit;
 import org.bukkit.GameMode;
 import org.bukkit.Location;
-import org.bukkit.entity.EntityType;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
@@ -25,7 +27,6 @@ import skypixel.dakotaAC;
 
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -35,18 +36,28 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
 
-/** Paper 1.21.11 + ProtocolLib 5.5.0-SNAPSHOT. */
+/** Original detection formulas; annotated defaults below are loaded from Modules.Tracers. */
 public class Tracers implements Listener {
 
-    // ==========================================
-    // SETĂRI UȘOR DE REGLAT (EASY TO TUNE)
-    // ==========================================
-    private static final int DECOYS_PER_SECOND = 20;
-    private static final long BATCH_INTERVAL_TICKS = 20L;
-    private static final double MIN_DECOY_DISTANCE = 15.0D;
-    private static final double MAX_DECOY_DISTANCE = 25.0D;
-    private static final int MAX_VIEW_COUNT_BEFORE_FLAG = 15;
-    // ==========================================
+    @Option(value = "initial-delay-ticks", min = 0.0, max = 1.0E9)
+    private static volatile long INITIAL_DELAY_TICKS = 20L;
+    @Option(value = "tab-remove-delay-ticks", min = 1.0, max = 1.0E9)
+    private static volatile long TAB_REMOVE_DELAY_TICKS = 5L;
+    @Option(value = "look-tolerance-degrees", min = 0.0, max = 1.0E9)
+    private static volatile double LOOK_TOLERANCE_DEGREES = 1.0D;
+    @Option(value = "vertical-random-spread", min = 0.0, max = 64.0)
+    private static volatile int VERTICAL_RANDOM_SPREAD = 3;
+
+    @Option(value = "decoys-per-second", min = 1.0, max = 256.0)
+    private static volatile int DECOYS_PER_SECOND = 20;
+    @Option(value = "batch-interval-ticks", min = 1.0, max = 1.0E9)
+    private static volatile long BATCH_INTERVAL_TICKS = 20L;
+    @Option(value = "min-decoy-distance", min = 0.0, max = 1.0E9)
+    private static volatile double MIN_DECOY_DISTANCE = 15.0D;
+    @Option(value = "max-decoy-distance", min = 0.0, max = 1.0E9)
+    private static volatile double MAX_DECOY_DISTANCE = 25.0D;
+    @Option(value = "max-view-count-before-flag", min = 1.0, max = 1.0E9)
+    private static volatile int MAX_VIEW_COUNT_BEFORE_FLAG = 15;
 
     private static final ProtocolManager PROTOCOL = ProtocolLibrary.getProtocolManager();
     private static final AtomicInteger NEXT_ENTITY_ID = new AtomicInteger(2_000_000);
@@ -56,7 +67,8 @@ public class Tracers implements Listener {
     private static final Map<UUID, Integer> viewCounts = new HashMap<>();
     private static final Set<UUID> flaggedPlayers = new HashSet<>();
 
-    private static final String[] FAKE_NAMES = {
+    @Option(value = "fake-names", minSize = 1)
+    private static volatile String[] FAKE_NAMES = {
             "SolarFlare", "LunarEcho", "CrimsonBolt", "AzureBlade", "EmberHeart", "VoidWalker",
             "IronTide", "SerpentFang", "StormBreaker", "FrostByte", "ShadowClaw", "RogueWave",
             "BlazeRunner", "NightShade", "QuantumLeap", "Vortexia", "GraveStone", "PhoenixAsh",
@@ -70,25 +82,25 @@ public class Tracers implements Listener {
     };
 
     public Tracers() {
-        ProtocolLibrary.getProtocolManager().addPacketListener(new PacketAdapter(
+        ProtocolLibrary.getProtocolManager().addPacketListener(new CompatibleAdapter(
                 dakotaAC.getPlugin(dakotaAC.class),
                 PacketType.Play.Client.LOOK,
                 PacketType.Play.Client.POSITION_LOOK
         ) {
             @Override
             public void onPacketReceiving(PacketEvent event) {
-                Bukkit.getScheduler().runTask(dakotaAC.getInstance(), () -> handlePlayerLook(event.getPlayer()));
+                Diagnostics.sync(() -> handlePlayerLook(event.getPlayer()));
             }
         });
 
-        Bukkit.getScheduler().runTaskTimer(dakotaAC.getInstance(), this::spawnBatches, 20L, BATCH_INTERVAL_TICKS);
+        Bukkit.getScheduler().runTaskTimer(dakotaAC.getInstance(), this::spawnBatches, INITIAL_DELAY_TICKS, BATCH_INTERVAL_TICKS);
     }
 
     private void spawnBatches() {
         for (Player player : Bukkit.getOnlinePlayers()) {
             UUID playerId = player.getUniqueId();
             if (player.getGameMode() != GameMode.SURVIVAL
-                    || !dakotaAC.isCheckActive("Tracers")
+                    || !dakotaAC.isCheckActive("Tracers") || CheckPolicy.exempt(player, "Tracers")
                     || flaggedPlayers.contains(playerId)) {
                 removeFakeNpcs(player);
                 continue;
@@ -116,7 +128,7 @@ public class Tracers implements Listener {
                 + RANDOM.nextDouble() * (MAX_DECOY_DISTANCE - MIN_DECOY_DISTANCE);
         Location location = player.getLocation().clone().add(
                 Math.cos(angle) * distance,
-                RANDOM.nextInt(7) - 3,
+                RANDOM.nextInt(VERTICAL_RANDOM_SPREAD * 2 + 1) - VERTICAL_RANDOM_SPREAD,
                 Math.sin(angle) * distance
         );
         UUID profileId = UUID.randomUUID();
@@ -133,9 +145,8 @@ public class Tracers implements Listener {
             PROTOCOL.sendServerPacket(player, createInvisibleMetadata(npc));
             PROTOCOL.sendServerPacket(player, createHeadRotation(npc));
             return true;
-        } catch (RuntimeException exception) {
-            dakotaAC.getInstance().getLogger().warning("Could not spawn Tracers decoy: " + exception.getMessage());
-            exception.printStackTrace();
+        } catch (RuntimeException | LinkageError exception) {
+            Diagnostics.report("Tracers", exception);
             return false;
         }
     }
@@ -148,14 +159,13 @@ public class Tracers implements Listener {
             for (FakeNpc npc : batch) {
                 try {
                     PROTOCOL.sendServerPacket(player, createPlayerInfoRemove(npc));
-                } catch (RuntimeException ignored) {
-                }
+                } catch (RuntimeException | LinkageError ignored) { Diagnostics.report("Tracers", ignored); }
             }
-        }, 5L);
+        }, TAB_REMOVE_DELAY_TICKS);
     }
 
     private void handlePlayerLook(Player player) {
-        if (player == null || !dakotaAC.isCheckActive("Tracers")
+        if (player == null || !dakotaAC.isCheckActive("Tracers") || CheckPolicy.exempt(player, "Tracers")
                 || flaggedPlayers.contains(player.getUniqueId())) {
             return;
         }
@@ -173,7 +183,7 @@ public class Tracers implements Listener {
             int count = viewCounts.getOrDefault(player.getUniqueId(), 0) + 1;
             viewCounts.put(player.getUniqueId(), count);
             if (count > MAX_VIEW_COUNT_BEFORE_FLAG) {
-                flagPlayer.addFlag(player, "Tracers", "Repeatedly looking at invisible entities.");
+                flagPlayer.addFlag(player, "Tracers", Lang.text("checks.Tracers.name-tracers"), Lang.text("checks.Tracers.details-repeatedly-looking-at-invisible-entities"));
                 flaggedPlayers.add(player.getUniqueId());
                 removeFakeNpcs(player);
             }
@@ -188,71 +198,15 @@ public class Tracers implements Listener {
 
         org.bukkit.util.Vector toNpc = npcLocation.toVector().subtract(player.getEyeLocation().toVector());
         return toNpc.lengthSquared() > 0.0D
-                && player.getEyeLocation().getDirection().angle(toNpc) < Math.toRadians(1.0D);
+                && player.getEyeLocation().getDirection().angle(toNpc) < Math.toRadians(LOOK_TOLERANCE_DEGREES);
     }
 
-    // =====================================================================
-    // FIX SUPREM: Injectăm EnumSet direct în obiectul NMS pentru a ocoli Bug-ul ProtocolLib
-    // =====================================================================
     private PacketContainer createPlayerInfoAdd(FakeNpc npc) {
-        PacketContainer packet = PROTOCOL.createPacket(PacketType.Play.Server.PLAYER_INFO);
-        packet.getModifier().writeDefaults();
-
-        try {
-            // Extragem obiectul original (NMS) înainte ca ProtocolLib să-l modifice
-            Object nmsPacket = packet.getHandle();
-
-            for (java.lang.reflect.Field field : nmsPacket.getClass().getDeclaredFields()) {
-                if (field.getType().equals(EnumSet.class)) {
-                    field.setAccessible(true);
-
-                    // Extragem clasa Enum nativă
-                    java.lang.reflect.ParameterizedType pType = (java.lang.reflect.ParameterizedType) field.getGenericType();
-                    @SuppressWarnings("rawtypes")
-                    Class<Enum> enumClass = (Class<Enum>) pType.getActualTypeArguments()[0];
-                    Object[] constants = enumClass.getEnumConstants();
-
-                    if (constants.length >= 6) {
-                        // Construim EnumSet-ul. Indecșii reprezintă:
-                        // [0] = ADD_PLAYER, [2] = UPDATE_GAME_MODE, [3] = UPDATE_LISTED, [5] = UPDATE_DISPLAY_NAME
-                        @SuppressWarnings({"unchecked", "rawtypes"})
-                        EnumSet actions = EnumSet.of(
-                                (Enum) constants[0],
-                                (Enum) constants[2],
-                                (Enum) constants[3],
-                                (Enum) constants[5]
-                        );
-
-                        // Injectăm valorile manual! Ocolim StructureModifier-ul ProtocolLib complet.
-                        field.set(nmsPacket, actions);
-                    }
-                    break;
-                }
-            }
-        } catch (Exception e) {
-            e.printStackTrace();
-        }
-
-        packet.getPlayerInfoDataLists().write(0, Collections.singletonList(new PlayerInfoData(
-                npc.uuid, 0, true, EnumWrappers.NativeGameMode.SURVIVAL,
-                npc.profile, WrappedChatComponent.fromText(npc.name), true, 0, null
-        )));
-
-        return packet;
+        return PacketAccess.playerInfo(npc.profile);
     }
 
     private PacketContainer createPlayerSpawn(FakeNpc npc) {
-        PacketContainer packet = PROTOCOL.createPacket(PacketType.Play.Server.SPAWN_ENTITY);
-        packet.getModifier().writeDefaults();
-        packet.getIntegers().write(0, npc.entityId);
-        packet.getUUIDs().write(0, npc.uuid);
-        packet.getEntityTypeModifier().write(0, EntityType.PLAYER);
-        packet.getDoubles().write(0, npc.location.getX()).write(1, npc.location.getY()).write(2, npc.location.getZ());
-        packet.getBytes().write(0, angleToByte(npc.location.getPitch()))
-                .write(1, angleToByte(npc.location.getYaw()))
-                .write(2, angleToByte(npc.location.getYaw()));
-        packet.getIntegers().write(1, 0);
-        return packet;
+        return PacketAccess.spawnPlayer(npc.entityId, npc.profile, npc.location);
     }
 
     @SuppressWarnings({"deprecation", "removal"})
@@ -297,6 +251,7 @@ public class Tracers implements Listener {
     private void removeFakeNpcs(Player player) {
         List<FakeNpc> batch = fakeNpcs.remove(player.getUniqueId());
         viewCounts.remove(player.getUniqueId());
+
         if (batch == null || !player.isOnline()) {
             return;
         }
@@ -305,14 +260,14 @@ public class Tracers implements Listener {
             try {
                 PROTOCOL.sendServerPacket(player, createEntityDestroy(npc));
                 PROTOCOL.sendServerPacket(player, createPlayerInfoRemove(npc));
-            } catch (RuntimeException ignored) {
-            }
+            } catch (RuntimeException | LinkageError ignored) { Diagnostics.report("Tracers", ignored); }
         }
     }
 
     @EventHandler
     public void onPlayerQuit(PlayerQuitEvent event) {
         removeFakeNpcs(event.getPlayer());
+        viewCounts.remove(event.getPlayer().getUniqueId());
         flaggedPlayers.remove(event.getPlayer().getUniqueId());
     }
 
@@ -327,8 +282,7 @@ public class Tracers implements Listener {
                 try {
                     PROTOCOL.sendServerPacket(player, createEntityDestroy(npc));
                     PROTOCOL.sendServerPacket(player, createPlayerInfoRemove(npc));
-                } catch (RuntimeException ignored) {
-                }
+                } catch (RuntimeException | LinkageError ignored) { Diagnostics.report("Tracers", ignored); }
             }
         }
         fakeNpcs.clear();

@@ -1,0 +1,295 @@
+# DakotaAC messages (English defaults)
+# Use & color codes. Every message can be customized or set to an empty string.
+# Placeholder names appear inside {braces}; keep names needed by your template.
+# The prefix can be inserted in any template with {prefix}.
+# /dac reload applies changes without restarting the server.
+# Check display names are independent of module identifiers in config.yml.
+
+prefix: '&8[&cDakotaAC&8] &7'
+common:
+  enabled: '&aENABLED'
+  disabled: '&cDISABLED'
+  'on': '&aON'
+  'off': '&cOFF'
+system:
+  started: 'DakotaAC v{version}: {active}/{total} checks active.'
+  stopped: DakotaAC has stopped.
+  staff-started: '&aDakotaAC started. All configured checks loaded.'
+  staff-degraded: '&cSome configured checks could not start. Run /dac status and check the console.'
+  missing-protocollib: ProtocolLib is missing or disabled. Install a ProtocolLib build that supports your Paper version.
+  invalid-setting: Invalid configuration value at {path}; using the bundled default.
+  component-error: '{component} encountered a compatibility/runtime error: {error}'
+  check-unavailable: The {check} check could not start. Other checks will continue; see /dac status.
+commands:
+  no-permission: '{prefix}&cYou do not have permission to use this command.'
+  help: '{prefix}Available commands: &c/dakotaac <{commands}>'
+  unknown: '{prefix}&cUnknown command.'
+  reload-success: '{prefix}&aConfiguration, messages, thresholds, and check tasks reloaded.'
+  reload-failed: '{prefix}&cReload failed. Check the console and correct config.yml or lang.yml.'
+  check-usage: '{prefix}&cUsage: /dakotaac check <ModuleName>'
+  check-unknown: '{prefix}&cModule ''{module}'' does not exist.'
+  check-toggle: '{prefix}Module &e{module} &7is now {state}.'
+  auto-kick-toggle: '{prefix}Auto-Kick is now {state}.'
+  auto-ban-toggle: '{prefix}Auto-Ban is now {state}.'
+  notifications-toggle: '{prefix}AntiCheat notifications are now {state}.'
+  flag-usage: '{prefix}&cUsage: /dakotaac flag <KickLimit> <BanLimit>'
+  flag-invalid: '{prefix}&cKick limit must be at least 1, and Ban limit must be higher than Kick limit.'
+  flag-updated: '{prefix}&aPunishment thresholds updated: kick at &e{kick}&a, ban at &e{ban}&a flags.'
+  flag-number: '{prefix}&cPlease enter valid whole numbers.'
+status:
+  header: '{prefix}&e--- DakotaAC Status ---'
+  version: '{prefix}Version: &b{version}'
+  authors: '{prefix}Authors: &b{authors}'
+  environment: '{prefix}Server: &b{server} &7| ProtocolLib: &b{protocollib}'
+  notifications: '{prefix}Notifications: {state}'
+  auto-kick: '{prefix}Auto-Kick: {state}'
+  auto-ban: '{prefix}Auto-Ban: {state}'
+  kick-limit: '{prefix}Kick Limit: &b{limit} &7flags'
+  ban-limit: '{prefix}Ban Limit: &b{limit} &7flags'
+  active: '{prefix}Active Modules: &b{active}/{total}'
+  unavailable: '{prefix}&cUnavailable checks: {checks}'
+  errors: '{prefix}Runtime errors since the last configuration load: &e{errors}'
+  healthy: '{prefix}&aConfigured checks loaded; no runtime errors recorded.'
+  degraded: '{prefix}&cProtection is degraded. Inspect the console diagnostics.'
+alerts:
+  console: '{prefix}&e{player} &7was flagged for &c{hack} &8(&7{details}&8)'
+  staff: '{prefix}&e{player} &7is suspected of &c{hack} &8(&7{details}&8)'
+punishments:
+  reason: '&c&lDakotaAC Security
+
+
+    &7You have been automatically removed from the server.
+
+    &7Reason: &c{hack}
+
+    &7Details: &8{details}'
+  ban-broadcast: '{prefix}&c{player} &7was banned for &c{hack}&7.'
+  kick-broadcast: '{prefix}&c{player} &7was kicked for &c{hack}&7.'
+reports:
+  usage: '&cUsage: /report <player>'
+  admin-usage: '&cUsage: /report <player> or /report info'
+  not-online: '&cThat player is not online!'
+  self: '&cYou cannot report yourself!'
+  cooldown: '&cPlease wait {seconds} seconds before reporting again.'
+  staff: '{prefix}&e{reporter} &7has reported &c{player}&7!'
+  total: '{prefix}Total reports for this player: &c{count}'
+  sent: '&aYour report has been sent to the online staff!'
+  antibot: '{prefix}&4⚠ &c{player} has accumulated {count} total reports! Triggering AntiBot module...'
+  only-player: '&cOnly players can open the report book!'
+  no-permission: '&cYou do not have permission to view reports.'
+  empty: '{prefix}&aThere are currently no reports in the database.'
+  book-title: '&cReport Database'
+  book-author: DakotaAC
+  book-header: '&0&lDAKOTA AC
+
+    &8Report Database
+
+    &8&m===================
+
+
+    '
+  book-entry: "&8» &0&l{name}\n   &8➥ &7Reports: &c{count}\n\n"
+  unknown-player: Unknown
+checks:
+  AutoClicker:
+    details-inhuman-cps-detected-cps: Inhuman CPS detected ({current-c-p-s} CPS).
+    name-autoclicker: AutoClicker
+  Criticals:
+    details-packet-burst-blink-timer-jump-cycle-completed-in: Packet Burst (Blink/Timer) - Jump cycle completed in {time-in-air}ms.
+    details-impossible-micro-jump-detected-y: 'Impossible micro-jump detected (Y: {d-y}).'
+    details-zero-vertical-velocity-mid-air-noground: Zero vertical velocity mid-air (NoGround).
+    name-criticals: Criticals
+  KillAura:
+    details-unnatural-hit-angle-dot: 'Unnatural hit angle (Dot: {dot-product}).'
+    details-attempted-to-attack-through-solid-blocks-repeatedly: Attempted to attack through solid blocks repeatedly.
+    details-inhuman-target-switch-ms: Inhuman target switch ({time-difference}ms).
+    name-killaura-angle: KillAura (Angle)
+    name-killaura-multi: KillAura (Multi)
+    name-killaura-wall: KillAura (Wall)
+  Reach:
+    details-hit-from-blocks-away-max: 'Hit from {distance-to-hitbox} blocks away (Max: {max-allowed-distance}).'
+    name-reach: Reach
+  Velocity:
+    details-took-only-vertical-kb: Took only {expected-y}% vertical KB
+    details-no-reaction-to-kb-after-ms: No reaction to KB after {value}ms
+    name-velocity-horizontal-reduce: Velocity (Horizontal Reduce)
+    name-velocity-vertical-reduce: Velocity (Vertical Reduce)
+    details-ignored-horizontal-kb: Ignored horizontal KB
+    name-velocity-cancel-lag: Velocity (Cancel/Lag)
+  AimBot:
+    details-unnatural-target-switching-detected-yaw-diff: 'Unnatural target switching detected (Yaw Diff: {diff-to-old-yaw}°)'
+    details-robotic-3d-snap-back-detected-flick: 'Robotic 3D snap-back detected (Flick: {delta-yaw}°)'
+    details-sent-invalid-pitch-angle: 'Sent invalid pitch angle: {current-pitch}°'
+    name-aimbot-derp: AimBot (Derp)
+    name-aimbot-snap: AimBot (Snap)
+    name-aimbot-aura: AimBot (Aura)
+  AutoArmor:
+    details-equipped-multiple-pieces-instantly-via-ms: Equipped multiple pieces instantly via {type} ({time-since-last-equip}ms)
+    details-equipped-instantly-after-armor-broke-ms: Equipped instantly after armor broke ({time-since-break}ms)
+    details-equipped-ghost-decoy-in-inhuman-time-ms: Equipped ghost decoy in inhuman time ({reaction-time}ms).
+    details-equipped-instantly-after-pickup-ms: Equipped instantly after pickup ({time-since-pickup}ms)
+    message-system-decoy: '&cSystem Decoy'
+    name-autoarmor: AutoArmor
+    input-gui-click: GUI Click
+  Hitbox:
+    details-hit-entity-without-looking-offset-max: 'Hit entity without looking (Offset: {distance-to-ray} | Max: {max-allowed-hitbox}).'
+    name-hitbox: Hitbox
+  Phase:
+    details-movement-trajectory-intersected-with-solid-block-bounds: Movement trajectory intersected with solid block bounds.
+    name-phase: Phase
+  GhostHand:
+    details-interacted-with-through-a-solid: Interacted with {name} through a solid {name-2}.
+    details-interacted-completely-out-of-range-blocks: Interacted completely out of range ({distance-to-center} blocks).
+    name-ghosthand-reach: GhostHand (Reach)
+    name-ghosthand-wall: GhostHand (Wall)
+  PingSpoof:
+    details-artificial-ping-fluctuations-spike-ms: 'Artificial ping fluctuations (Spike: {ping-difference}ms).'
+    name-pingspoof: PingSpoof
+  Plugins:
+    details-attempted-to-view-server-plugins-via-command: Attempted to view server plugins via command ({cmd}).
+    message-unknown-command-type-help-for-help: Unknown command. Type "/help" for help.
+    name-plugins: Plugins
+  GodMode:
+    details-sending-movement-packets-while-deeply-asleep: Sending movement packets while deeply asleep.
+    details-moving-horizontally-while-dead: Moving horizontally while dead.
+    name-godmode-ghostwalk: GodMode (GhostWalk)
+    name-godmode-sleepwalk: GodMode (SleepWalk)
+  Regen:
+    details-sent-too-many-state-packets-sec-to-force: Sent too many state packets ({count}/sec) to force fast healing.
+    details-regenerating-health-unnaturally-fast-delay-ms: 'Regenerating health unnaturally fast (Delay: {delay}ms).'
+    name-regen-timer: Regen (Timer)
+    name-regen-speed: Regen (Speed)
+  ServerCrasher:
+    fake-disconnect-message: 'Internal Exception: java.io.IOException: Connection reset by peer'
+    details-sent-too-many-action-packets-sec: Sent too many action packets ({count}/sec)
+    name-servercrasher: ServerCrasher
+  Blink:
+    details-moved-blocks-instantly: Moved {distance} blocks instantly.
+    details-sent-illegal-corrupted-coordinates: Sent illegal/corrupted coordinates.
+    name-blink: Blink
+  Derp:
+    details-impossible-head-pitch-rotation: Impossible head pitch rotation ({current-pitch}°).
+    details-erratic-and-unnatural-head-rotations: Erratic and unnatural head rotations.
+    name-derp-pitch: Derp (Pitch)
+    name-derp: Derp
+  Spammer:
+    message-please-slow-down-do-not-spam-s: '&c&l[!] &cPlease slow down! Do not spam {to-lower-case}s.'
+    details-repeating-the-exact-same-too-quickly: Repeating the exact same {to-lower-case} too quickly.
+    details-sending-s-too-fast: Sending {to-lower-case}s too fast.
+    name-spammer: Spammer
+    type-command: command
+    type-chat: chat
+  AntiBot:
+    details-attacked-the-level-two-inspection-player-times: Attacked the level-two inspection player {hits} times.
+    message-could-not-create-antibot-virtual-player: 'Could not create AntiBot virtual player: {get-message}'
+    name-antibot: AntiBot
+  HighJump:
+    details-impossible-jump-velocity-y-speed-max: 'Impossible jump velocity (Y-Speed: {delta-y} | Max: {max-jump-velocity})'
+    name-highjump: HighJump
+  InventoryMove:
+    details-walking-jumping-with-gui-open-dxz: 'Walking/Jumping with GUI open (dXZ: {delta-x-z})'
+    details-sprinting-while-interacting-with-inventory: Sprinting while interacting with inventory.
+    name-inventorymove-sprint: InventoryMove (Sprint)
+    name-inventorymove: InventoryMove
+  Step:
+    details-exceeded-max-y-step-limit: 'Exceeded max Y-step: {delta-y} (Limit: {max-allowed-y})'
+    name-step: Step
+  NoSlowDown:
+    details-moving-too-fast-through-a-slowing-block-speed: 'Moving too fast through a slowing block (Speed: {delta-x-z})'
+    details-sustained-speed-while-using-item-speed: 'Sustained speed while using item (Speed: {delta-x-z})'
+    name-noslowdown-item: NoSlowDown (Item)
+    name-noslowdown-web: NoSlowDown (Web)
+  Sprint:
+    details-sprinting-sideways-backwards-angle: 'Sprinting sideways/backwards (Angle: {angle}°).'
+    name-sprint-omnisprint: Sprint (OmniSprint)
+  Fly:
+    details-ascended-for-ticks-dy: 'Ascended for {ascend-ticks} ticks (dY: {delta-y})'
+    details-suspended-in-air-for-ticks: Suspended in air for {hover-ticks} ticks
+    name-fly-ascension: Fly (Ascension)
+    name-fly-hover: Fly (Hover)
+  Sneak:
+    details-moving-too-fast-while-sneaking-speed-max: 'Moving too fast while sneaking (Speed: {delta-x-z} | Max: {max-sneak-speed})'
+    name-sneak: Sneak
+  NoFall:
+    details-spoofed-onground-mid-air-realfall: 'Spoofed onGround mid-air (RealFall: {real-fall-dist})'
+    details-landed-but-denied-onground-realfall: 'Landed but denied onGround (RealFall: {pending})'
+    name-nofall-noground: NoFall (NoGround)
+    name-nofall-spoof: NoFall (Spoof)
+  Jesus:
+    details-unnatural-vertical-stability-in-liquid-y-speed: 'Unnatural vertical stability in liquid (Y-Speed: {delta-y})'
+    name-jesus: Jesus
+  Speed:
+    details-sustained-unnatural-speed-buffer: 'Sustained unnatural speed (Buffer: {buffer})'
+    details-absurd-momentum: Absurd momentum ({delta-x-z})
+    name-speed-strafe-bhop: Speed (Strafe/Bhop)
+    name-speed-instant: Speed (Instant)
+  FastUse:
+    details-consumed-abnormally-fast-ms: Consumed {name} abnormally fast ({time-taken}ms).
+    details-consumed-item-without-starting-the-use-animation: Consumed item without starting the use-animation.
+    name-fastuse-instaeat: FastUse (InstaEat)
+    name-fastuse: FastUse
+  AntiVoid:
+    details-teleported-back-up-from-the-void-illegally-distance: 'Teleported back up from the void illegally (Distance: {delta-y}).'
+    details-claiming-to-be-on-the-ground-while-in: Claiming to be on the ground while in the void.
+    name-antivoid-ground: AntiVoid (Ground)
+    name-antivoid-blink: AntiVoid (Blink)
+  AntiVPN:
+    kick-message: '&c[Skypixel] &fVPN / Proxy connections are not allowed!'
+    details-connected-using-a-vpn-proxy-ip: 'Connected using a VPN/Proxy (IP: {ip}).'
+    name-antivpn: AntiVPN
+  ChestStealer:
+    details-looted-instantly-after-opening-react-ms-ping-ms: 'Looted instantly after opening (React: {reaction-time}ms | Ping: {ping}ms).'
+    details-inhuman-looting-speed-items-sec: Inhuman looting speed ({current-speed} items/sec).
+    name-cheststealer-reaction: ChestStealer (Reaction)
+    name-cheststealer-speed: ChestStealer (Speed)
+  Version:
+    details-joined-using-an-outdated-version-protocol-ac-checks: 'Joined using an outdated version (Protocol: {protocol-version}). AC checks might
+      be unstable.'
+    details-playing-on-a-modloader-possible-illegal-mods: Playing on a modloader ({brand}). Possible illegal mods.
+    details-unknown-or-unapproved-client-detected: 'Unknown or unapproved client detected: {brand}'
+    name-version-suspicious: Version (Suspicious)
+    name-version-modded: Version (Modded)
+    name-version: Version
+  InventoryCleaner:
+    details-inhuman-inventory-actions-actions-sec: Inhuman inventory actions ({current-actions} actions/sec).
+    details-inhuman-item-drop-rate-drops-sec: Inhuman item drop rate ({current-drops} drops/sec).
+    name-inventorycleaner-autodrop: InventoryCleaner (AutoDrop)
+    name-inventorycleaner: InventoryCleaner
+  XRay:
+    details-unnatural-mining-precision-ratio-stone-ore: 'Unnatural mining precision (Ratio: {ratio} stone/ore).'
+    details-attempted-to-mine-a-fake-ore-block-generated: Attempted to mine a fake ore block generated by the AntiCheat.
+    details-mined-valuable-ore-in-complete-darkness: Mined valuable ore in complete darkness.
+    name-xray-decoy: XRay (Decoy)
+    name-xray-ratio: XRay (Ratio)
+    name-xray-light: XRay (Light)
+  Tracers:
+    message-could-not-spawn-tracers-decoy: 'Could not spawn Tracers decoy: {get-message}'
+    details-repeatedly-looking-at-invisible-entities: Repeatedly looking at invisible entities.
+    name-tracers: Tracers
+  Timer:
+    details-sent-packets-too-fast-game-speed-artificially-increased: Sent packets too fast (Game speed artificially increased).
+    name-timer: Timer
+  FastPlace:
+    details-machine-like-block-placement-ms-delay: Machine-like block placement ({delay}ms delay).
+    name-fastplace: FastPlace
+  Nuker:
+    details-attempted-to-break-blocks-simultaneously-under-ms: Attempted to break {burst-count} blocks simultaneously (under {value}ms).
+    details-inhuman-breaking-speed-blocks-sec: Inhuman breaking speed ({total-breaks} blocks/sec).
+    name-nuker: Nuker
+  FastBreak:
+    details-broke-heavy-block-extremely-fast-ms: Broke heavy block extremely fast ({time-taken}ms).
+    details-broke-obsidian-extremely-fast-ms: Broke Obsidian extremely fast ({time-taken}ms).
+    details-insta-mined-deepslate-block-ms: Insta-mined deepslate block ({time-taken}ms).
+    name-fastbreak: FastBreak
+  Scaffold:
+    details-attempted-to-click-a-hidden-block-face-dot: 'Attempted to click a hidden block face (Dot: {dot-product}).'
+    details-machine-like-block-placement-ms: Machine-like block placement ({delay}ms).
+    details-impossible-sprint-bridging-architecture: Impossible sprint bridging architecture.
+    name-scaffold-angle-face: Scaffold (Angle/Face)
+    name-scaffold-sprint: Scaffold (Sprint)
+    name-scaffold-tower: Scaffold (Tower)
+  Fucker:
+    details-broke-through-a-solid-block: Broke {name} through a solid block ({name-2}).
+    details-broke-block-out-of-range-reach: 'Broke block out of range (Reach: {distance-to-center}).'
+    details-broke-block-without-looking-at-it-ghostbreak: Broke block without looking at it (GhostBreak).
+    name-fucker: Fucker

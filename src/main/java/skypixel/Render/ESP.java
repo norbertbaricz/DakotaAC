@@ -1,5 +1,8 @@
 package skypixel.Render;
 
+import skypixel.config.CheckPolicy;
+import skypixel.config.Option;
+
 import org.bukkit.Bukkit;
 import org.bukkit.FluidCollisionMode;
 import org.bukkit.GameMode;
@@ -20,15 +23,16 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.UUID;
 
+/** Original detection formulas; annotated defaults below are loaded from Modules.ESP. */
 public class ESP implements Listener {
 
-    // =========================================================
-    // SETĂRI UȘOR DE REGLAT
-    // =========================================================
-    // Distanța maximă la care procesăm entitățile/jucătorii.
-    private static final double MAX_ENTITY_RANGE = 40.0D;
-    private static final long TASK_INTERVAL_TICKS = 5L;
-    // =========================================================
+    @Option(value = "nearby-visibility-distance", min = 0.0, max = 1.0E9)
+    private static volatile double NEARBY_VISIBILITY_DISTANCE = 2.5;
+
+    @Option(value = "max-entity-range", min = 0.0, max = 1.0E9)
+    private static volatile double MAX_ENTITY_RANGE = 40.0D;
+    @Option(value = "task-interval-ticks", min = 1.0, max = 1.0E9)
+    private static volatile long TASK_INTERVAL_TICKS = 5L;
 
     private static final HashMap<UUID, HashSet<UUID>> hiddenPlayers = new HashMap<>();
     private static final HashMap<UUID, HashSet<UUID>> hiddenEntities = new HashMap<>();
@@ -38,8 +42,10 @@ public class ESP implements Listener {
             @Override
             public void run() {
                 if (!dakotaAC.isCheckActive("ESP")) return;
+                if (!CheckPolicy.enforce("ESP")) { for (Player viewer : Bukkit.getOnlinePlayers()) restoreViewer(viewer); return; }
 
                 for (Player viewer : Bukkit.getOnlinePlayers()) {
+                    if (CheckPolicy.exempt(viewer, "ESP")) { restoreViewer(viewer); continue; }
                     if (viewer.getGameMode() == GameMode.SPECTATOR) continue;
 
                     UUID viewerId = viewer.getUniqueId();
@@ -49,16 +55,13 @@ public class ESP implements Listener {
                     HashSet<UUID> hiddenP = hiddenPlayers.get(viewerId);
                     HashSet<UUID> hiddenE = hiddenEntities.get(viewerId);
 
-                    // 1. JUCĂTORI (Anti-Player ESP)
                     for (Player target : Bukkit.getOnlinePlayers()) {
                         if (viewer.equals(target)) continue;
 
-                        // FIX: Previne eroarea de calcul matematic între dimensiuni diferite (Overworld/Nether)
                         if (!viewer.getWorld().equals(target.getWorld())) {
                             continue;
                         }
 
-                        // FIX PERFORMANȚĂ: Nu procesăm jucătorii aflați la kilometri distanță!
                         boolean outOfRange = viewer.getLocation().distanceSquared(target.getLocation()) > (MAX_ENTITY_RANGE * MAX_ENTITY_RANGE);
 
                         if (outOfRange || !hasTrueLineOfSight(viewer, target)) {
@@ -68,7 +71,6 @@ public class ESP implements Listener {
                         }
                     }
 
-                    // 2. ENTITĂȚI (Anti-Mob / Item ESP)
                     for (Entity target : viewer.getNearbyEntities(MAX_ENTITY_RANGE, MAX_ENTITY_RANGE, MAX_ENTITY_RANGE)) {
                         if (target instanceof Player) continue;
 
@@ -86,11 +88,8 @@ public class ESP implements Listener {
         }.runTaskTimer(dakotaAC.getInstance(), 0L, TASK_INTERVAL_TICKS);
     }
 
-    /**
-     * RayTrace inteligent în 2 puncte care ignoră formele transparente/decorative.
-     */
     private boolean hasTrueLineOfSight(Player viewer, Entity target) {
-        // Dublă protecție pentru dimensiuni, direct la sursa calculului
+
         if (viewer.getWorld() != target.getWorld()) return false;
 
         Location eye = viewer.getEyeLocation();
@@ -103,7 +102,7 @@ public class ESP implements Listener {
 
         for (Location point : points) {
             double distance = eye.distance(point);
-            if (distance < 2.5) return true;
+            if (distance < NEARBY_VISIBILITY_DISTANCE) return true;
 
             Vector direction = point.toVector().subtract(eye.toVector()).normalize();
 
@@ -124,10 +123,6 @@ public class ESP implements Listener {
         }
         return false;
     }
-
-    // ========================================================================
-    // METODE NATIVE BUKKIT (Gestionează automat pachetele Destroy/Spawn)
-    // ========================================================================
 
     private void hidePlayer(Player viewer, Player target, HashSet<UUID> hiddenSet) {
         if (!hiddenSet.contains(target.getUniqueId())) {
@@ -157,10 +152,6 @@ public class ESP implements Listener {
         }
     }
 
-    // ========================================================================
-    // CLEANUP
-    // ========================================================================
-
     @EventHandler
     public void onPlayerQuit(PlayerQuitEvent event) {
         UUID quitId = event.getPlayer().getUniqueId();
@@ -189,5 +180,17 @@ public class ESP implements Listener {
         }
         hiddenPlayers.clear();
         hiddenEntities.clear();
+    }
+    private static void restoreViewer(Player viewer) {
+        java.util.Set<UUID> players = hiddenPlayers.remove(viewer.getUniqueId());
+        java.util.Set<UUID> entities = hiddenEntities.remove(viewer.getUniqueId());
+        if (players != null) for (UUID uuid : players) {
+            Player target = Bukkit.getPlayer(uuid);
+            if (target != null) viewer.showPlayer(dakotaAC.getInstance(), target);
+        }
+        if (entities != null) for (UUID uuid : entities) {
+            Entity target = Bukkit.getEntity(uuid);
+            if (target != null) viewer.showEntity(dakotaAC.getInstance(), target);
+        }
     }
 }

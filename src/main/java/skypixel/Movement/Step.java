@@ -1,10 +1,15 @@
 package skypixel.Movement;
 
+import skypixel.compat.PacketAccess;
+import skypixel.compat.Diagnostics;
+import skypixel.config.CheckPolicy;
+import skypixel.config.Lang;
+import skypixel.config.Option;
+
 import com.comphenix.protocol.PacketType;
 import com.comphenix.protocol.ProtocolLibrary;
-import com.comphenix.protocol.events.PacketAdapter;
+import skypixel.compat.CompatibleAdapter;
 import com.comphenix.protocol.events.PacketEvent;
-import org.bukkit.Bukkit;
 import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.entity.Player;
@@ -21,28 +26,35 @@ import skypixel.dakotaAC;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
+/** Original detection formulas; annotated defaults below are loaded from Modules.Step. */
 public class Step implements Listener {
 
-    // ==========================================
-    // SETĂRI UȘOR DE REGLAT (EASY TO TUNE)
-    // ==========================================
-    // Viteza de salt maximă permisă pur Vanilla
-    private static final double BASE_JUMP_Y = 0.425;
+    @Option(value = "max-tracked-delta-y", min = 0.0, max = 1.0E9)
+    private static volatile double MAX_TRACKED_DELTA_Y = 10.0;
+    @Option(value = "teleport-grace-ms", min = 1.0, max = 1.0E9)
+    private static volatile long TELEPORT_GRACE_MS = 1000L;
+    @Option(value = "damage-immunity-ticks", min = 1.0, max = 1.0E9)
+    private static volatile int DAMAGE_IMMUNITY_TICKS = 10;
+    @Option(value = "velocity-exemption-y", min = 0.0, max = 1.0E9)
+    private static volatile double VELOCITY_EXEMPTION_Y = 0.43;
+    @Option(value = "bounce-immunity-ms", min = 1.0, max = 1.0E9)
+    private static volatile long BOUNCE_IMMUNITY_MS = 2000L;
 
-    // Înălțimea maximă a unui Step (Slab-urile / Scările au 0.5, Paturile ~0.56, folosim 0.6)
-    private static final double MAX_STEP_Y = 0.6;
+    @Option(value = "base-jump-y", min = 0.0, max = 1.0E9)
+    private static volatile double BASE_JUMP_Y = 0.425;
 
-    // Multiplicatorul pentru licoarea de Jump Boost
-    private static final double JUMP_BOOST_MULTIPLIER = 0.15;
+    @Option(value = "max-step-y", min = 0.0, max = 1.0E9)
+    private static volatile double MAX_STEP_Y = 0.6;
 
-    // Limita fizică a lumii pentru a preveni crash-urile
-    private static final double MAX_WORLD_COORDINATE = 3.0E7;
+    @Option(value = "jump-boost-multiplier", min = 0.0, max = 1.0E9)
+    private static volatile double JUMP_BOOST_MULTIPLIER = 0.15;
 
-    // Câte mișcări imposibile iertăm din cauza lag-ului de rețea?
-    private static final int MAX_VIOLATIONS = 2;
-    // ==========================================
+    @Option(value = "max-world-coordinate", min = 0.0, max = 1.0E9)
+    private static volatile double MAX_WORLD_COORDINATE = 3.0E7;
 
-    // Colecții concurente pentru siguranță asincronă totală
+    @Option(value = "max-violations", min = 1.0, max = 1.0E9)
+    private static volatile int MAX_VIOLATIONS = 2;
+
     private final ConcurrentHashMap<UUID, Long> bounceCooldowns = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<UUID, double[]> lastPosMap = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<UUID, Location> lastSafeLocation = new ConcurrentHashMap<>();
@@ -51,7 +63,7 @@ public class Step implements Listener {
 
     public Step() {
         ProtocolLibrary.getProtocolManager().addPacketListener(
-                new PacketAdapter(dakotaAC.getPlugin(dakotaAC.class),
+                new CompatibleAdapter(dakotaAC.getPlugin(dakotaAC.class),
                         com.comphenix.protocol.events.ListenerPriority.NORMAL,
                         PacketType.Play.Client.POSITION,
                         PacketType.Play.Client.POSITION_LOOK) {
@@ -62,25 +74,23 @@ public class Step implements Listener {
                             if (!dakotaAC.isCheckActive("Step")) return;
 
                             Player player = event.getPlayer();
+                            if (player != null && CheckPolicy.exempt(player, "Step")) return;
                             if (player == null) return;
                             UUID uuid = player.getUniqueId();
 
-                            // Extragem coordonatele noi brute din pachet
-                            double toX = event.getPacket().getDoubles().readSafely(0);
-                            double toY = event.getPacket().getDoubles().readSafely(1);
-                            double toZ = event.getPacket().getDoubles().readSafely(2);
+                            double toX = PacketAccess.coordinate(event.getPacket(), 0);
+                            double toY = PacketAccess.coordinate(event.getPacket(), 1);
+                            double toZ = PacketAccess.coordinate(event.getPacket(), 2);
 
-                            // === PROTECȚIE CRASH EXPLOITS ===
                             if (Double.isNaN(toX) || Double.isNaN(toY) || Double.isNaN(toZ) ||
                                     Double.isInfinite(toX) || Double.isInfinite(toY) || Double.isInfinite(toZ) ||
                                     Math.abs(toX) > MAX_WORLD_COORDINATE || Math.abs(toZ) > MAX_WORLD_COORDINATE) {
-                                event.setCancelled(true);
+                                if (CheckPolicy.cancel("Step")) event.setCancelled(true);
                                 return;
                             }
 
                             double[] fromPos = lastPosMap.get(uuid);
 
-                            // Înregistrăm coordonatele la prima mișcare
                             if (fromPos == null) {
                                 lastPosMap.put(uuid, new double[]{toX, toY, toZ});
                                 return;
@@ -88,52 +98,43 @@ public class Step implements Listener {
 
                             double deltaY = toY - fromPos[1];
 
-                            // Desync / Blink Filter: Dacă diferența este masivă, e un Ghost Packet
-                            if (deltaY > 10.0 || deltaY < -10.0) {
+                            if (deltaY > MAX_TRACKED_DELTA_Y || deltaY < -MAX_TRACKED_DELTA_Y) {
                                 return;
                             }
 
-                            // Salvăm locația veche într-o variabilă temporară imuabilă
                             final double[] safeFromPos = {fromPos[0], fromPos[1], fromPos[2]};
 
-                            // Actualizăm matricea pentru pachetul viitor
                             lastPosMap.put(uuid, new double[]{toX, toY, toZ});
 
-                            // Optimizare Extremă pe Rețea: Ignorăm mersul drept sau căderea
                             if (deltaY <= 0.0) {
                                 return;
                             }
 
-                            // Delegăm verificările hărții pe Main Thread (Bukkit)
-                            Bukkit.getScheduler().runTask(dakotaAC.getPlugin(dakotaAC.class), () -> {
+                            Diagnostics.sync(() -> {
                                 if (!player.isOnline() || player.isDead()) return;
 
                                 Location toLoc = new Location(player.getWorld(), toX, toY, toZ);
 
-                                // Perioada de grație pentru TP / Immediate Respawn
                                 long lastTeleport = teleportGrace.getOrDefault(uuid, 0L);
-                                if (System.currentTimeMillis() - lastTeleport < 1000) {
+                                if (System.currentTimeMillis() - lastTeleport < TELEPORT_GRACE_MS) {
                                     lastSafeLocation.put(uuid, toLoc);
                                     return;
                                 }
 
                                 Location fromLoc = new Location(player.getWorld(), safeFromPos[0], safeFromPos[1], safeFromPos[2], player.getLocation().getYaw(), player.getLocation().getPitch());
 
-                                // Bypass-uri legitime
                                 if (player.getAllowFlight() || player.isInsideVehicle() || player.isSwimming() || player.isGliding() || player.hasPotionEffect(PotionEffectType.LEVITATION)) {
                                     lastSafeLocation.put(uuid, toLoc);
                                     return;
                                 }
 
-                                // Knockback de la damage (săritură forțată de server)
-                                if (player.getNoDamageTicks() > 10 || player.getVelocity().getY() > 0.43) {
+                                if (player.getNoDamageTicks() > DAMAGE_IMMUNITY_TICKS || player.getVelocity().getY() > VELOCITY_EXEMPTION_Y) {
                                     lastSafeLocation.put(uuid, toLoc);
                                     return;
                                 }
 
-                                // Verificăm impulsurile de la Slime Blocks / Paturi
                                 if (isNearBouncingBlock(toLoc) || isNearBouncingBlock(fromLoc)) {
-                                    bounceCooldowns.put(uuid, System.currentTimeMillis() + 2000L);
+                                    bounceCooldowns.put(uuid, System.currentTimeMillis() + BOUNCE_IMMUNITY_MS);
                                 }
 
                                 if (bounceCooldowns.containsKey(uuid) && bounceCooldowns.get(uuid) > System.currentTimeMillis()) {
@@ -141,7 +142,6 @@ public class Step implements Listener {
                                     return;
                                 }
 
-                                // Verificăm blocurile pe care se află (scări, apă, schele)
                                 Material currentBlock = toLoc.getBlock().getType();
                                 if (currentBlock == Material.WATER || currentBlock == Material.LAVA ||
                                         currentBlock == Material.LADDER || currentBlock == Material.VINE ||
@@ -151,7 +151,6 @@ public class Step implements Listener {
                                     return;
                                 }
 
-                                // --- LOGICA DE VERIFICARE ---
                                 double maxAllowedY = BASE_JUMP_Y;
 
                                 if (player.hasPotionEffect(PotionEffectType.JUMP_BOOST)) {
@@ -166,42 +165,34 @@ public class Step implements Listener {
 
                                 int vl = stepBuffer.getOrDefault(uuid, 0);
 
-                                // EVALUAREA FINALĂ
                                 if (deltaY > maxAllowedY) {
                                     vl++;
                                     stepBuffer.put(uuid, vl);
 
                                     if (vl >= MAX_VIOLATIONS) {
-                                        flagPlayer.addFlag(player, "Step", "Exceeded max Y-step: " + String.format("%.3f", deltaY) + " (Limit: " + maxAllowedY + ")");
+                                        flagPlayer.addFlag(player, "Step", Lang.text("checks.Step.name-step"), Lang.text("checks.Step.details-exceeded-max-y-step-limit", "delta-y", String.format(java.util.Locale.ROOT, "%.3f", deltaY), "max-allowed-y", maxAllowedY));
 
-                                        // Oferim imunitate ca Rubber-Band-ul să nu genereze alarme false la HighJump/Fly
-                                        teleportGrace.put(uuid, System.currentTimeMillis() + 1000L);
+                                        teleportGrace.put(uuid, System.currentTimeMillis() + TELEPORT_GRACE_MS);
 
-                                        // Rubber-Band: Tragem jucătorul înapoi în siguranță pe pământ
                                         Location safe = lastSafeLocation.getOrDefault(uuid, fromLoc);
-                                        player.teleport(safe, PlayerTeleportEvent.TeleportCause.PLUGIN);
+                                        if (CheckPolicy.setbacks("Step")) player.teleport(safe, PlayerTeleportEvent.TeleportCause.PLUGIN);
 
-                                        // Reducem buffer-ul parțial
                                         stepBuffer.put(uuid, 1);
                                     }
                                 } else {
-                                    // Urcare legitimă
+
                                     if (vl > 0) stepBuffer.put(uuid, vl - 1);
                                     lastSafeLocation.put(uuid, toLoc);
                                 }
                             });
 
-                        } catch (Exception ex) {
-                            ex.printStackTrace();
+                        } catch (Exception | LinkageError ex) {
+                            Diagnostics.report("Step", ex);
                         }
                     }
                 }
         );
     }
-
-    // ========================================================
-    // PROTECȚII LA ALARME FALSE (TELEPORT / RESPAWN)
-    // ========================================================
 
     @EventHandler(priority = EventPriority.MONITOR)
     public void onPlayerTeleport(PlayerTeleportEvent event) {
@@ -210,7 +201,7 @@ public class Step implements Listener {
         Location to = event.getTo();
 
         if (to != null) {
-            teleportGrace.put(uuid, System.currentTimeMillis()); // 1 secundă grație
+            teleportGrace.put(uuid, System.currentTimeMillis()); 
             lastSafeLocation.put(uuid, to);
             lastPosMap.put(uuid, new double[]{to.getX(), to.getY(), to.getZ()});
         }
@@ -236,10 +227,6 @@ public class Step implements Listener {
         teleportGrace.remove(uuid);
         stepBuffer.remove(uuid);
     }
-
-    // ========================================================
-    // VERIFICĂRI DE FIZICĂ
-    // ========================================================
 
     private boolean isNearBouncingBlock(Location loc) {
         int x = loc.getBlockX();

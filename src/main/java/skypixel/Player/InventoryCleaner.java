@@ -1,10 +1,14 @@
 package skypixel.Player;
 
+import skypixel.compat.Diagnostics;
+import skypixel.config.CheckPolicy;
+import skypixel.config.Lang;
+import skypixel.config.Option;
+
 import com.comphenix.protocol.PacketType;
 import com.comphenix.protocol.ProtocolLibrary;
-import com.comphenix.protocol.events.PacketAdapter;
+import skypixel.compat.CompatibleAdapter;
 import com.comphenix.protocol.events.PacketEvent;
-import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
@@ -18,31 +22,24 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
 
+/** Original detection formulas; annotated defaults below are loaded from Modules.InventoryCleaner. */
 public class InventoryCleaner implements Listener {
 
-    // ==========================================
-    // SETĂRI UȘOR DE REGLAT (EASY TO TUNE)
-    // ==========================================
-    // Fereastra de timp pentru calculul acțiunilor (1 secundă absoarbe perfect lag-ul de rețea)
-    private static final long TIME_WINDOW_MS = 1000L;
+    @Option(value = "time-window-ms", min = 1.0, max = 1.0E9)
+    private static volatile long TIME_WINDOW_MS = 1000L;
 
-    // Numărul maxim de acțiuni în inventar (click-uri/mutări) permis pe secundă.
-    // Oamenii rapizi (Shift+Click) ating ~12-15 acțiuni/sec.
-    // Un Auto-Cleaner mută 36 de iteme instant (milisecunde).
-    private static final int MAX_INVENTORY_ACTIONS = 20;
+    @Option(value = "max-inventory-actions", min = 1.0, max = 1.0E9)
+    private static volatile int MAX_INVENTORY_ACTIONS = 20;
 
-    // Numărul maxim de iteme aruncate pe jos (AutoDrop / Q-Spam) pe secundă.
-    // Când apeși 'Q' normal, clientul adaugă un delay intern. Macro-urile trec peste acest delay.
-    private static final int MAX_ITEM_DROPS = 15;
-    // ==========================================
+    @Option(value = "max-item-drops", min = 1.0, max = 1.0E9)
+    private static volatile int MAX_ITEM_DROPS = 15;
 
-    // Folosim ConcurrentHashMap și un obiect centralizat pentru thread-safety total
     private final ConcurrentHashMap<UUID, Tracker> trackerMap = new ConcurrentHashMap<>();
 
     public InventoryCleaner() {
-        // 1. Interceptăm click-urile asincron pentru a proteja Main Thread-ul de Stealer/Cleaner
+
         ProtocolLibrary.getProtocolManager().addPacketListener(
-                new PacketAdapter(dakotaAC.getPlugin(dakotaAC.class),
+                new CompatibleAdapter(dakotaAC.getPlugin(dakotaAC.class),
                         com.comphenix.protocol.events.ListenerPriority.HIGHEST,
                         PacketType.Play.Client.WINDOW_CLICK) {
 
@@ -52,6 +49,7 @@ public class InventoryCleaner implements Listener {
                             if (!dakotaAC.isCheckActive("InventoryCleaner")) return;
 
                             Player player = event.getPlayer();
+                            if (player != null && CheckPolicy.exempt(player, "InventoryCleaner")) return;
                             if (player == null) return;
                             UUID uuid = player.getUniqueId();
 
@@ -62,7 +60,6 @@ public class InventoryCleaner implements Listener {
 
                             tracker.clicks.add(now);
 
-                            // Curățare extrem de rapidă și asincronă, fără blocaje (Thread-Safe)
                             while (!tracker.clicks.isEmpty() && tracker.clicks.peek() < now - TIME_WINDOW_MS) {
                                 tracker.clicks.poll();
                             }
@@ -70,45 +67,39 @@ public class InventoryCleaner implements Listener {
                             int currentActions = tracker.clicks.size();
 
                             if (currentActions > MAX_INVENTORY_ACTIONS) {
-                                // Dropăm pachetul! Jucătorul este blocat și nu mai poate muta itemul
-                                event.setCancelled(true);
 
-                                // Prevenim spam-ul excesiv în consolă
+                                if (CheckPolicy.cancel("InventoryCleaner")) event.setCancelled(true);
+
                                 if (!tracker.clickFlagged) {
                                     tracker.clickFlagged = true;
 
-                                    Bukkit.getScheduler().runTask(dakotaAC.getPlugin(dakotaAC.class), () -> {
+                                    Diagnostics.sync(() -> {
                                         if (player.isOnline()) {
-                                            flagPlayer.addFlag(player, "InventoryCleaner", "Inhuman inventory actions (" + currentActions + " actions/sec).");
+                                            flagPlayer.addFlag(player, "InventoryCleaner", Lang.text("checks.InventoryCleaner.name-inventorycleaner"), Lang.text("checks.InventoryCleaner.details-inhuman-inventory-actions-actions-sec", "current-actions", currentActions));
                                         }
                                     });
                                 }
 
-                                // Resetăm parțial logica pentru a prinde din nou tura viitoare
                                 tracker.clicks.clear();
                             } else {
                                 tracker.clickFlagged = false;
                             }
 
-                        } catch (Exception ex) {
-                            ex.printStackTrace();
+                        } catch (Exception | LinkageError ex) {
+                            Diagnostics.report("InventoryCleaner", ex);
                         }
                     }
                 }
         );
     }
 
-    // ========================================================
-    // 2. GESTIUNEA DROP-URILOR (AutoDrop) PE MAIN THREAD
-    // Păstrăm Bukkit pentru a lăsa serverul să repare Ghost Items automat!
-    // ========================================================
     @EventHandler(priority = EventPriority.HIGHEST)
     public void onPlayerDropItem(PlayerDropItemEvent event) {
         if (!dakotaAC.isCheckActive("InventoryCleaner")) return;
 
         Player player = event.getPlayer();
+        if (player != null && CheckPolicy.exempt(player, "InventoryCleaner")) return;
 
-        // În joc, iertăm Modul Creativ de limite la aruncarea pe jos
         if (player.getGameMode().name().equals("CREATIVE")) return;
 
         UUID uuid = player.getUniqueId();
@@ -127,12 +118,11 @@ public class InventoryCleaner implements Listener {
 
         if (currentDrops > MAX_ITEM_DROPS) {
 
-            // Anulăm drop-ul (Bukkit va forța instantaneu itemul înapoi în inventar)
-            event.setCancelled(true);
+            if (CheckPolicy.cancel("InventoryCleaner")) event.setCancelled(true);
 
             if (!tracker.dropFlagged) {
                 tracker.dropFlagged = true;
-                flagPlayer.addFlag(player, "InventoryCleaner (AutoDrop)", "Inhuman item drop rate (" + currentDrops + " drops/sec).");
+                flagPlayer.addFlag(player, "InventoryCleaner", Lang.text("checks.InventoryCleaner.name-inventorycleaner-autodrop"), Lang.text("checks.InventoryCleaner.details-inhuman-item-drop-rate-drops-sec", "current-drops", currentDrops));
             }
 
             tracker.drops.clear();
@@ -143,14 +133,10 @@ public class InventoryCleaner implements Listener {
 
     @EventHandler
     public void onPlayerQuit(PlayerQuitEvent event) {
-        // Prevenim memory leaks (scurgeri de memorie)
+
         trackerMap.remove(event.getPlayer().getUniqueId());
     }
 
-    /**
-     * Clasă ajutătoare care stochează evenimentele folosind Cozi Concurente,
-     * garantând 0 Crash-uri și performanță maximă fără `synchronized`.
-     */
     private static class Tracker {
         final ConcurrentLinkedQueue<Long> clicks = new ConcurrentLinkedQueue<>();
         final ConcurrentLinkedQueue<Long> drops = new ConcurrentLinkedQueue<>();

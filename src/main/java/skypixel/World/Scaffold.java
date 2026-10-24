@@ -1,8 +1,13 @@
 package skypixel.World;
 
+import skypixel.compat.Diagnostics;
+import skypixel.config.CheckPolicy;
+import skypixel.config.Lang;
+import skypixel.config.Option;
+
 import com.comphenix.protocol.PacketType;
 import com.comphenix.protocol.ProtocolLibrary;
-import com.comphenix.protocol.events.PacketAdapter;
+import skypixel.compat.CompatibleAdapter;
 import com.comphenix.protocol.events.PacketEvent;
 import org.bukkit.GameMode;
 import org.bukkit.Location;
@@ -20,38 +25,37 @@ import skypixel.dakotaAC;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
+/** Original detection formulas; annotated defaults below are loaded from Modules.Scaffold. */
 public class Scaffold implements Listener {
 
-    // ==========================================
-    // SETĂRI UȘOR DE REGLAT (EASY TO TUNE)
-    // ==========================================
-    // Produsul scalar maxim permis.
-    // > 0 înseamnă că se uită în aceeași direcție cu fața blocului (imposibil).
-    // Lăsăm 0.35 pentru a ierta desincronizările când jucătorul este pe muchia absolută a blocului.
-    private static final double MAX_DOT_PRODUCT = 0.35;
+    @Option(value = "initial-place-delay-ms", min = 0.0, max = 1.0E9)
+    private static volatile long INITIAL_PLACE_DELAY_MS = 500L;
+    @Option(value = "sprint-bridge-distance", min = 0.0, max = 1.0E9)
+    private static volatile double SPRINT_BRIDGE_DISTANCE = 1.0;
 
-    // Pitch-ul minim pentru a considera că se uită în jos (în grade).
-    private static final float MIN_SCAFFOLD_PITCH = 75.0f;
+    @Option(value = "max-dot-product", min = -1.0, max = 1.0)
+    private static volatile double MAX_DOT_PRODUCT = 0.35;
 
-    // Timpul minim legal (în milisecunde) între plasări pentru un "Tower".
-    private static final long MIN_TOWER_DELAY_MS = 75L;
+    @Option(value = "min-scaffold-pitch", min = 0.0, max = 1.0E9)
+    private static volatile float MIN_SCAFFOLD_PITCH = 75.0f;
 
-    // Filtrul de lag (Packet Stacking / TCP Burst)
-    private static final long TCP_BURST_THRESHOLD_MS = 15L;
+    @Option(value = "min-tower-delay-ms", min = 1.0, max = 1.0E9)
+    private static volatile long MIN_TOWER_DELAY_MS = 75L;
 
-    // Câte plasări rapide (Tower) iertăm?
-    private static final int MAX_TOWER_VIOLATIONS = 3;
-    // ==========================================
+    @Option(value = "tcp-burst-threshold-ms", min = 1.0, max = 1.0E9)
+    private static volatile long TCP_BURST_THRESHOLD_MS = 15L;
 
-    // Memorie thread-safe pentru calculul asincron al delay-ului (Prevenirea lag-ului)
+    @Option(value = "max-tower-violations", min = 1.0, max = 1.0E9)
+    private static volatile int MAX_TOWER_VIOLATIONS = 3;
+
     private final ConcurrentHashMap<UUID, Long> lastPacketTime = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<UUID, Long> exactDelayMap = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<UUID, Integer> fastPlaceBuffer = new ConcurrentHashMap<>();
 
     public Scaffold() {
-        // Interceptăm intenția de a pune blocul direct din placa de rețea
+
         ProtocolLibrary.getProtocolManager().addPacketListener(
-                new PacketAdapter(dakotaAC.getPlugin(dakotaAC.class),
+                new CompatibleAdapter(dakotaAC.getPlugin(dakotaAC.class),
                         com.comphenix.protocol.events.ListenerPriority.NORMAL,
                         PacketType.Play.Client.USE_ITEM_ON) {
 
@@ -61,17 +65,16 @@ public class Scaffold implements Listener {
                             if (!dakotaAC.isCheckActive("Scaffold")) return;
 
                             Player player = event.getPlayer();
+                            if (player != null && CheckPolicy.exempt(player, "Scaffold")) return;
                             if (player == null || player.getGameMode() == GameMode.CREATIVE) return;
 
                             UUID uuid = player.getUniqueId();
                             long now = System.currentTimeMillis();
                             long lastTime = lastPacketTime.getOrDefault(uuid, 0L);
 
-                            // Calculăm puritatea latenței de click
                             if (lastTime > 0) {
                                 long delay = now - lastTime;
 
-                                // FIX CRITIC DE REȚEA: Ignorăm TCP Bursts (pachete trimise instantaneu din cauza lag-ului)
                                 if (delay > TCP_BURST_THRESHOLD_MS) {
                                     exactDelayMap.put(uuid, delay);
                                 }
@@ -79,23 +82,20 @@ public class Scaffold implements Listener {
 
                             lastPacketTime.put(uuid, now);
 
-                        } catch (Exception ex) {
-                            ex.printStackTrace();
+                        } catch (Exception | LinkageError ex) {
+                            Diagnostics.report("Scaffold", ex);
                         }
                     }
                 }
         );
     }
 
-    // ========================================================
-    // DELEGAREA CĂTRE BUKKIT: Analiza Geometrică și de Viteză
-    // ========================================================
-
     @EventHandler(priority = EventPriority.LOWEST)
     public void onBlockPlace(BlockPlaceEvent event) {
         if (!dakotaAC.isCheckActive("Scaffold")) return;
 
         Player player = event.getPlayer();
+        if (player != null && CheckPolicy.exempt(player, "Scaffold")) return;
         if (player.getGameMode() == GameMode.CREATIVE) return;
 
         Block placed = event.getBlockPlaced();
@@ -107,43 +107,29 @@ public class Scaffold implements Listener {
         String flagReason = "";
         String flagType = "";
 
-        // --------------------------------------------------------
-        // 1. HIDDEN FACE CHECK (Vector Dot Product)
-        // --------------------------------------------------------
-        // Vectorul Normal (direcția feței blocului pe care a dat click)
         Vector faceNormal = placed.getLocation().toVector().subtract(against.getLocation().toVector());
         Vector lookVector = playerLoc.getDirection();
 
-        // Produsul scalar: Dacă e > 0, unghiul e sub 90 de grade (imposibil legitim)
         double dotProduct = lookVector.dot(faceNormal);
 
         if (dotProduct > MAX_DOT_PRODUCT) {
             isFlagged = true;
-            flagType = "Scaffold (Angle/Face)";
-            flagReason = "Attempted to click a hidden block face (Dot: " + String.format("%.2f", dotProduct) + ").";
+            flagType = Lang.text("checks.Scaffold.name-scaffold-angle-face");
+            flagReason = Lang.text("checks.Scaffold.details-attempted-to-click-a-hidden-block-face-dot", "dot-product", String.format(java.util.Locale.ROOT, "%.2f", dotProduct));
         }
 
-        // --------------------------------------------------------
-        // 2. SPRINT PARADOX (Arhitectura podurilor)
-        // --------------------------------------------------------
-        // Ninja Bridge (Sneak/Unsneak) și God Bridge necesită timing perfect, dar
-        // dacă jucătorul este strict în SPRINT continuu, se uită mult în jos și pune blocul direct sub el...
         if (!isFlagged && player.isSprinting() && playerLoc.getPitch() > MIN_SCAFFOLD_PITCH) {
             double distanceXZ = Math.hypot(playerLoc.getX() - (placed.getX() + 0.5), playerLoc.getZ() - (placed.getZ() + 0.5));
 
-            // Dacă blocul este pus sub nivelul picioarelor și e extrem de aproape de centrul lui
-            if (placed.getY() <= playerLoc.getBlockY() && distanceXZ < 1.0) {
+            if (placed.getY() <= playerLoc.getBlockY() && distanceXZ < SPRINT_BRIDGE_DISTANCE) {
                 isFlagged = true;
-                flagType = "Scaffold (Sprint)";
-                flagReason = "Impossible sprint bridging architecture.";
+                flagType = Lang.text("checks.Scaffold.name-scaffold-sprint");
+                flagReason = Lang.text("checks.Scaffold.details-impossible-sprint-bridging-architecture");
             }
         }
 
-        // --------------------------------------------------------
-        // 3. TOWER CHECK / AUTO-CLICKER (Viteza asincronă perfectă)
-        // --------------------------------------------------------
         if (!isFlagged) {
-            long delay = exactDelayMap.getOrDefault(uuid, 500L);
+            long delay = exactDelayMap.getOrDefault(uuid, INITIAL_PLACE_DELAY_MS);
 
             if (delay < MIN_TOWER_DELAY_MS) {
                 int vl = fastPlaceBuffer.getOrDefault(uuid, 0) + 1;
@@ -151,9 +137,9 @@ public class Scaffold implements Listener {
 
                 if (vl >= MAX_TOWER_VIOLATIONS) {
                     isFlagged = true;
-                    flagType = "Scaffold (Tower)";
-                    flagReason = "Machine-like block placement (" + delay + "ms).";
-                    fastPlaceBuffer.put(uuid, 0); // Resetăm pentru a preveni spam-ul
+                    flagType = Lang.text("checks.Scaffold.name-scaffold-tower");
+                    flagReason = Lang.text("checks.Scaffold.details-machine-like-block-placement-ms", "delay", delay);
+                    fastPlaceBuffer.put(uuid, 0); 
                 }
             } else {
                 int currentVl = fastPlaceBuffer.getOrDefault(uuid, 0);
@@ -161,24 +147,18 @@ public class Scaffold implements Listener {
             }
         }
 
-        // ========================================================
-        // EXECUTAREA PEDEPSEI (Anti Ghost-Block)
-        // ========================================================
         if (isFlagged) {
-            flagPlayer.addFlag(player, flagType, flagReason);
+            flagPlayer.addFlag(player, "Scaffold", flagType, flagReason);
 
-            // Anulăm direct evenimentul pe server. Bukkit va face automat un update
-            // forțat către client, spunându-i să șteargă blocul vizual!
-            event.setCancelled(true);
+            if (CheckPolicy.cancel("Scaffold")) event.setCancelled(true);
 
-            // Tăiem sprint-ul (dacă există) pentru a-l face să cadă de pe pod
-            player.setSprinting(false);
+            if (CheckPolicy.enforce("Scaffold")) player.setSprinting(false);
         }
     }
 
     @EventHandler
     public void onPlayerQuit(PlayerQuitEvent event) {
-        // Prevenirea scurgerilor de memorie RAM
+
         UUID uuid = event.getPlayer().getUniqueId();
         lastPacketTime.remove(uuid);
         exactDelayMap.remove(uuid);

@@ -1,30 +1,36 @@
 name: DakotaAC
-version: '0.18'
+version: '0.19'
 main: skypixel.dakotaAC
-description: Advanced, high-performance anti-cheat for modern Paper servers.
-api-version: '1.21'
-authors:
-  - MaxUltimat3
+description: Configurable anti-cheat for modern Paper servers.
+api-version: '1.21.11'
+authors: [MaxUltimat3]
 website: https://modrinth.com/plugin/dakotaac
-load: STARTUP
-depend:
-  - ProtocolLib
-
+load: POSTWORLD
+depend: [ProtocolLib]
+softdepend: [ViaVersion]
 commands:
   dakotaac:
-    description: Main DakotaAC command.
+    description: Manage DakotaAC and inspect compatibility status.
     usage: /dakotaac
-    aliases:
-      - dac
-      - anticheat
+    aliases: [dac, anticheat]
   report:
-    description: Report a suspicious player.
+    description: Report a suspicious player or view the report database.
     usage: /report <player>
-
 permissions:
   dakotaac.command:
-    description: Allows access to DakotaAC commands.
+    description: Reserved command permission for existing installations.
     default: op
   dakotaac.admin:
-    description: Allows receiving report notifications and viewing the report book.
+    description: Manage checks, reload settings, and inspect reports.
+    default: op
+  dakotaac.notification:
+    description: Receive violation alerts.
+    default: op
+  dakotaac.alerts:
+    description: Legacy alias for the alert permission.
+    default: op
+    children:
+      dakotaac.notification: true
+  dakotaac.bypass.vpn:
+    description: Bypass the VPN lookup.
     default: op

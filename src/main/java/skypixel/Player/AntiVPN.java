@@ -1,5 +1,10 @@
 package skypixel.Player;
 
+import skypixel.compat.Diagnostics;
+import skypixel.config.CheckPolicy;
+import skypixel.config.Lang;
+import skypixel.config.Option;
+
 import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
@@ -12,78 +17,57 @@ import skypixel.dakotaAC;
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
 import java.net.HttpURLConnection;
-import java.net.URL;
 
+/** Original detection formulas; annotated defaults below are loaded from Modules.AntiVPN. */
 public class AntiVPN implements Listener {
 
-    // ==========================================
-    // EASY TO TUNE SETTINGS
-    // ==========================================
+    @Option(value = "connect-timeout-ms", min = 1.0, max = 1.0E9)
+    private static volatile int CONNECT_TIMEOUT_MS = 3000;
+    @Option(value = "read-timeout-ms", min = 1.0, max = 1.0E9)
+    private static volatile int READ_TIMEOUT_MS = 3000;
 
-    // The API used (free, no key required)
-    private static final String API_URL = "https://blackbox.ipinfo.app/lookup/";
+    @Option("api-url")
+    private static volatile String API_URL = "https://blackbox.ipinfo.app/lookup/";
 
-    // Do you want to just flag to admins, or automatically kick the player?
-    private static final boolean KICK_ON_DETECTION = false;
-    private static final String KICK_MESSAGE = "§c[Skypixel] §fVPN / Proxy connections are not allowed!";
+    @Option("kick-on-detection")
+    private static volatile boolean KICK_ON_DETECTION = false;
 
-    // Players with this permission (e.g., staff) can bypass the VPN check
-    private static final String BYPASS_PERMISSION = "dakotaac.bypass.vpn";
-
-    // ==========================================
-    // CORE LOGIC
-    // ==========================================
+    @Option("bypass-permission")
+    private static volatile String BYPASS_PERMISSION = "dakotaac.bypass.vpn";
 
     @EventHandler(priority = EventPriority.LOW)
     public void onPlayerJoin(PlayerJoinEvent event) {
-        if (!dakotaAC.isCheckActive("AntiVPN")) return;
-
         Player player = event.getPlayer();
-
-        // 1. Check bypass permission
-        if (player.hasPermission(BYPASS_PERMISSION)) return;
-
-        // Extract the player's IP
-        // Note: If you are on BungeeCord/Velocity, make sure IP Forwarding is enabled in configs!
-        String ip = player.getAddress().getAddress().getHostAddress();
-
-        // Ignore local addresses (when connecting from localhost or local network)
-        if (ip.equals("127.0.0.1") || ip.startsWith("192.168.") || ip.startsWith("10.")) return;
-
-        // 2. Make the API request asynchronously to prevent server lag
-        Bukkit.getScheduler().runTaskAsynchronously(dakotaAC.getPlugin(dakotaAC.class), () -> {
+        if (!dakotaAC.isCheckActive("AntiVPN") || CheckPolicy.exempt(player, "AntiVPN")) return;
+        if (!BYPASS_PERMISSION.isBlank() && player.hasPermission(BYPASS_PERMISSION)) return;
+        if (player.getAddress() == null || player.getAddress().getAddress() == null) return;
+        java.net.InetAddress address = player.getAddress().getAddress();
+        if (address.isLoopbackAddress() || address.isSiteLocalAddress() || address.isAnyLocalAddress()) return;
+        String ip = address.getHostAddress();
+        dakotaAC plugin = dakotaAC.getInstance();
+        long generation = plugin.getGeneration();
+        Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
+            HttpURLConnection connection = null;
             try {
-                URL url = new URL(API_URL + ip);
-                HttpURLConnection connection = (HttpURLConnection) url.openConnection();
+                connection = (HttpURLConnection) java.net.URI.create(API_URL + ip).toURL().openConnection();
                 connection.setRequestMethod("GET");
-
-                // Set a short timeout (3 seconds) so we don't wait forever if the API goes down
-                connection.setConnectTimeout(3000);
-                connection.setReadTimeout(3000);
-
-                BufferedReader reader = new BufferedReader(new InputStreamReader(connection.getInputStream()));
-                String response = reader.readLine();
-                reader.close();
-
-                // 3. The API returns "Y" if the IP belongs to a VPN / Data Center / Proxy
-                if ("Y".equals(response)) {
-
-                    // Return to the main thread to flag or kick the player
-                    Bukkit.getScheduler().runTask(dakotaAC.getPlugin(dakotaAC.class), () -> {
-                        if (!player.isOnline()) return;
-
-                        // Send flag to admins
-                        flagPlayer.addFlag(player, "AntiVPN", "Connected using a VPN/Proxy (IP: " + ip + ").");
-
-                        // If the kick option is enabled in Easy Tune
-                        if (KICK_ON_DETECTION) {
-                            player.kickPlayer(KICK_MESSAGE);
-                        }
-                    });
+                connection.setConnectTimeout(CONNECT_TIMEOUT_MS);
+                connection.setReadTimeout(READ_TIMEOUT_MS);
+                String response;
+                try (BufferedReader reader = new BufferedReader(new InputStreamReader(connection.getInputStream(), java.nio.charset.StandardCharsets.UTF_8))) {
+                    response = reader.readLine();
                 }
-            } catch (Exception e) {
-                // If the API is down or times out, fail silently.
-                // It's better to let a hacker slip by than crash the server.
+                if (!"Y".equals(response)) return;
+                Diagnostics.sync(() -> {
+                    if (!player.isOnline() || generation != plugin.getGeneration() || !dakotaAC.isCheckActive("AntiVPN") || CheckPolicy.exempt(player, "AntiVPN")) return;
+                    flagPlayer.addFlag(player, "AntiVPN", Lang.text("checks.AntiVPN.name-antivpn"),
+                            Lang.text("checks.AntiVPN.details-connected-using-a-vpn-proxy-ip", "ip", ip));
+                    if (KICK_ON_DETECTION && CheckPolicy.enforce("AntiVPN")) player.kickPlayer(Lang.text("checks.AntiVPN.kick-message"));
+                });
+            } catch (Exception | LinkageError ex) {
+                if (generation == plugin.getGeneration()) Diagnostics.report("AntiVPN", ex);
+            } finally {
+                if (connection != null) connection.disconnect();
             }
         });
     }

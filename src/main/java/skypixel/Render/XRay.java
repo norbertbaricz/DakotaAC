@@ -1,14 +1,17 @@
 package skypixel.Render;
 
+import skypixel.compat.Diagnostics;
+import skypixel.config.CheckPolicy;
+import skypixel.config.Lang;
+import skypixel.config.Option;
+
 import com.comphenix.protocol.PacketType;
 import com.comphenix.protocol.ProtocolLibrary;
-import com.comphenix.protocol.ProtocolManager;
-import com.comphenix.protocol.events.PacketAdapter;
+import skypixel.compat.CompatibleAdapter;
 import com.comphenix.protocol.events.PacketContainer;
 import com.comphenix.protocol.events.PacketEvent;
 import com.comphenix.protocol.wrappers.BlockPosition;
 import com.comphenix.protocol.wrappers.EnumWrappers;
-import com.comphenix.protocol.wrappers.WrappedBlockData;
 import org.bukkit.Bukkit;
 import org.bukkit.GameMode;
 import org.bukkit.Location;
@@ -30,33 +33,40 @@ import java.util.Random;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
+/** Original detection formulas; annotated defaults below are loaded from Modules.XRay. */
 public class XRay implements Listener {
 
-    // ==========================================
-    // SETĂRI UȘOR DE REGLAT (EASY TO TUNE)
-    // ==========================================
-    // Setări pentru sistemul matematic (Stone vs Ore)
-    // În versiunile 1.18+, venele de fier/cupru sunt masive. Așteptăm să spargă 30 de minereuri pentru a face o medie corectă.
-    private static final int MIN_ORES_TO_CHECK = 30;
+    @Option(value = "initial-delay-ticks", min = 0.0, max = 1.0E9)
+    private static volatile long INITIAL_DELAY_TICKS = 100L;
+    @Option(value = "task-interval-ticks", min = 1.0, max = 1.0E9)
+    private static volatile long TASK_INTERVAL_TICKS = 200L;
+    @Option(value = "max-plant-attempts", min = 1.0, max = 256.0)
+    private static volatile int MAX_PLANT_ATTEMPTS = 20;
 
-    // Raportul minim admis. Un raport sub 5.0 înseamnă că jucătorul găsește 1 minereu la fiecare 4 blocuri sparte (imposibil legitim pe termen lung).
-    private static final double MIN_STONE_TO_ORE_RATIO = 5.0;
+    @Option(value = "min-ores-to-check", min = 1.0, max = 1.0E9)
+    private static volatile int MIN_ORES_TO_CHECK = 30;
 
-    // Pedepsim jucătorii care minează pe întuneric? (Falsează dacă folosesc moduri Fullbright / Gamma)
-    private static final boolean PENALIZE_MINING_IN_DARK = false;
+    @Option(value = "min-stone-to-ore-ratio", min = 0.0, max = 1.0E9)
+    private static volatile double MIN_STONE_TO_ORE_RATIO = 5.0;
 
-    // Setări pentru sistemul "Momeală" (Decoy Ores)
-    private static final int MAX_ACTIVE_DECOYS_PER_PLAYER = 15;
-    private static final int DECOYS_PLANTED_PER_CYCLE = 5;
-    private static final int SCAN_RADIUS_HORIZONTAL = 6;
-    private static final int SCAN_RADIUS_VERTICAL = 5;
-    // ==========================================
+    @Option("penalize-mining-in-dark")
+    private static volatile boolean PENALIZE_MINING_IN_DARK = false;
+
+    @Option(value = "max-active-decoys-per-player", min = 1.0, max = 256.0)
+    private static volatile int MAX_ACTIVE_DECOYS_PER_PLAYER = 15;
+    @Option(value = "decoys-planted-per-cycle", min = 1.0, max = 256.0)
+    private static volatile int DECOYS_PLANTED_PER_CYCLE = 5;
+    @Option(value = "scan-radius-horizontal", min = 1.0, max = 64.0)
+    private static volatile int SCAN_RADIUS_HORIZONTAL = 6;
+    @Option(value = "scan-radius-vertical", min = 1.0, max = 64.0)
+    private static volatile int SCAN_RADIUS_VERTICAL = 5;
 
     private final ConcurrentHashMap<UUID, Integer> stoneMined = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<UUID, Integer> oresMined = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<UUID, ConcurrentHashMap<Location, Material>> fakeOres = new ConcurrentHashMap<>();
 
-    private static final Material[] DECOY_ORES = {
+    @Option(value = "decoy-ores", minSize = 1)
+    private static volatile Material[] DECOY_ORES = {
             Material.COAL_ORE, Material.DEEPSLATE_COAL_ORE,
             Material.COPPER_ORE, Material.DEEPSLATE_COPPER_ORE,
             Material.IRON_ORE, Material.DEEPSLATE_IRON_ORE,
@@ -68,15 +78,16 @@ public class XRay implements Listener {
             Material.ANCIENT_DEBRIS
     };
 
-    private static final Material[] FAKEABLE_BLOCKS = {
+    @Option("fakeable-blocks")
+    private static volatile Material[] FAKEABLE_BLOCKS = {
             Material.STONE, Material.DEEPSLATE, Material.TUFF, Material.NETHERRACK
     };
 
     public XRay() {
-        // Detectăm momentul în care clientul începe să spargă un bloc de momeală
+
         try {
             ProtocolLibrary.getProtocolManager().addPacketListener(
-                    new PacketAdapter(dakotaAC.getPlugin(dakotaAC.class),
+                    new CompatibleAdapter(dakotaAC.getPlugin(dakotaAC.class),
                             com.comphenix.protocol.events.ListenerPriority.NORMAL,
                             PacketType.Play.Client.BLOCK_DIG) {
 
@@ -86,13 +97,14 @@ public class XRay implements Listener {
                                 if (!dakotaAC.isCheckActive("XRay")) return;
 
                                 Player player = event.getPlayer();
+                            if (player != null && CheckPolicy.exempt(player, "XRay")) return;
                                 if (player == null || player.getGameMode() == GameMode.CREATIVE) return;
 
                                 PacketContainer packet = event.getPacket();
-                                EnumWrappers.PlayerDigType digType = packet.getPlayerDigTypes().readSafely(0);
+                                EnumWrappers.PlayerDigType digType = packet.getPlayerDigTypes().read(0);
                                 if (digType != EnumWrappers.PlayerDigType.START_DESTROY_BLOCK) return;
 
-                                BlockPosition pos = packet.getBlockPositionModifier().readSafely(0);
+                                BlockPosition pos = packet.getBlockPositionModifier().read(0);
                                 if (pos == null) return;
 
                                 Map<Location, Material> playerFakes = fakeOres.get(player.getUniqueId());
@@ -102,36 +114,36 @@ public class XRay implements Listener {
                                 Material real = playerFakes.remove(loc);
 
                                 if (real != null) {
-                                    // Dacă dă click pe momeală, trimitem direct flag!
-                                    Bukkit.getScheduler().runTask(dakotaAC.getPlugin(dakotaAC.class), () -> {
+
+                                    Diagnostics.sync(() -> {
                                         if (player.isOnline()) {
-                                            flagPlayer.addFlag(player, "XRay (Decoy)", "Attempted to mine a fake ore block generated by the AntiCheat.");
+                                            flagPlayer.addFlag(player, "XRay", Lang.text("checks.XRay.name-xray-decoy"), Lang.text("checks.XRay.details-attempted-to-mine-a-fake-ore-block-generated"));
                                         }
                                     });
                                     revertFakeOre(player, loc, real);
                                 }
-                            } catch (Exception ex) {
-                                ex.printStackTrace();
+                            } catch (Exception | LinkageError ex) {
+                                Diagnostics.report("XRay", ex);
                             }
                         }
                     }
             );
-        } catch (Exception ex) {
-            ex.printStackTrace();
+        } catch (Exception | LinkageError ex) {
+            throw new IllegalStateException(ex);
         }
 
-        // La fiecare 10 secunde, plantăm câteva minereuri false lângă jucători.
         new BukkitRunnable() {
             @Override
             public void run() {
                 if (!dakotaAC.isCheckActive("XRay")) return;
 
                 for (Player player : Bukkit.getOnlinePlayers()) {
+                    if (CheckPolicy.exempt(player, "XRay")) { cleanupPlayer(player); continue; }
                     if (player.getGameMode() == GameMode.CREATIVE || player.getGameMode() == GameMode.SPECTATOR) continue;
                     plantDecoyOres(player);
                 }
             }
-        }.runTaskTimer(dakotaAC.getPlugin(dakotaAC.class), 100L, 200L);
+        }.runTaskTimer(dakotaAC.getPlugin(dakotaAC.class), INITIAL_DELAY_TICKS, TASK_INTERVAL_TICKS);
     }
 
     private void plantDecoyOres(Player player) {
@@ -143,7 +155,7 @@ public class XRay implements Listener {
         int planted = 0;
         int attempts = 0;
 
-        while (planted < DECOYS_PLANTED_PER_CYCLE && playerFakes.size() < MAX_ACTIVE_DECOYS_PER_PLAYER && attempts < 20) {
+        while (planted < DECOYS_PLANTED_PER_CYCLE && playerFakes.size() < MAX_ACTIVE_DECOYS_PER_PLAYER && attempts < MAX_PLANT_ATTEMPTS) {
             attempts++;
 
             int dx = r.nextInt(SCAN_RADIUS_HORIZONTAL * 2 + 1) - SCAN_RADIUS_HORIZONTAL;
@@ -180,17 +192,11 @@ public class XRay implements Listener {
     }
 
     private void sendFakeBlock(Player player, Location loc, Material fakeMaterial) {
-        try {
-            ProtocolManager pm = ProtocolLibrary.getProtocolManager();
-            PacketContainer packet = pm.createPacket(PacketType.Play.Server.BLOCK_CHANGE);
-            packet.getBlockPositionModifier().writeSafely(0, new BlockPosition(loc.getBlockX(), loc.getBlockY(), loc.getBlockZ()));
-            packet.getBlockData().writeSafely(0, WrappedBlockData.createData(fakeMaterial));
-            pm.sendServerPacket(player, packet);
-        } catch (Exception ignored) {}
+        player.sendBlockChange(loc, fakeMaterial.createBlockData());
     }
 
     private void revertFakeOre(Player player, Location loc, Material realMaterial) {
-        sendFakeBlock(player, loc, realMaterial);
+        if (loc.getWorld().equals(player.getWorld())) player.sendBlockChange(loc, loc.getBlock().getBlockData());
     }
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
@@ -198,13 +204,13 @@ public class XRay implements Listener {
         if (!dakotaAC.isCheckActive("XRay")) return;
 
         Player player = event.getPlayer();
+        if (player != null && CheckPolicy.exempt(player, "XRay")) return;
         if (player.getGameMode() == GameMode.CREATIVE) return;
 
         Block block = event.getBlock();
         Material type = block.getType();
         UUID uuid = player.getUniqueId();
 
-        // Expunerea momelelor
         Map<Location, Material> playerFakes = fakeOres.get(uuid);
         if (playerFakes != null && !playerFakes.isEmpty()) {
             for (BlockFace face : BlockFace.values()) {
@@ -218,7 +224,6 @@ public class XRay implements Listener {
             }
         }
 
-        // Statistici Minereuri vs Piatră
         if (isCommonBlock(type)) {
             stoneMined.put(uuid, stoneMined.getOrDefault(uuid, 0) + 1);
         } else if (isValuableOre(type)) {
@@ -231,19 +236,17 @@ public class XRay implements Listener {
                 double ratio = (double) stone / ores;
 
                 if (ratio < MIN_STONE_TO_ORE_RATIO) {
-                    flagPlayer.addFlag(player, "XRay (Ratio)", "Unnatural mining precision (Ratio: " + String.format("%.1f", ratio) + " stone/ore).");
+                    flagPlayer.addFlag(player, "XRay", Lang.text("checks.XRay.name-xray-ratio"), Lang.text("checks.XRay.details-unnatural-mining-precision-ratio-stone-ore", "ratio", String.format(java.util.Locale.ROOT, "%.1f", ratio)));
 
-                    // Resetăm doar o parte din memorie, pentru a nu-l face imun pe termen scurt
                     oresMined.put(uuid, 0);
                     stoneMined.put(uuid, 0);
                 }
             }
 
-            // Opțional: Verificarea luminii
             if (PENALIZE_MINING_IN_DARK) {
                 if ((type == Material.DIAMOND_ORE || type == Material.DEEPSLATE_DIAMOND_ORE || type == Material.ANCIENT_DEBRIS)) {
                     if (block.getLightLevel() == 0 && !player.hasPotionEffect(org.bukkit.potion.PotionEffectType.NIGHT_VISION)) {
-                        flagPlayer.addFlag(player, "XRay (Light)", "Mined valuable ore in complete darkness.");
+                        flagPlayer.addFlag(player, "XRay", Lang.text("checks.XRay.name-xray-light"), Lang.text("checks.XRay.details-mined-valuable-ore-in-complete-darkness"));
                     }
                 }
             }
@@ -259,7 +262,7 @@ public class XRay implements Listener {
 
     private boolean isValuableOre(Material mat) {
         String name = mat.name();
-        // Excludem Iron și Copper pentru a proteja venele uriașe din 1.18+ care strică raportul!
+
         if (name.contains("IRON") || name.contains("COPPER") || name.contains("COAL")) return false;
 
         return name.contains("_ORE") || name.equals("ANCIENT_DEBRIS");
@@ -271,5 +274,32 @@ public class XRay implements Listener {
         stoneMined.remove(uuid);
         oresMined.remove(uuid);
         fakeOres.remove(uuid);
+    }
+    /** Restore current world data; stored material snapshots can become stale after another player mines. */
+    public void cleanup() {
+        for (Map.Entry<UUID, ConcurrentHashMap<Location, Material>> entry : fakeOres.entrySet()) {
+            Player player = Bukkit.getPlayer(entry.getKey());
+            if (player == null || !player.isOnline()) continue;
+            for (Location location : entry.getValue().keySet()) {
+                if (location.getWorld().equals(player.getWorld()) && location.getWorld().isChunkLoaded(location.getBlockX() >> 4, location.getBlockZ() >> 4)) {
+                    player.sendBlockChange(location, location.getBlock().getBlockData());
+                }
+            }
+        }
+        fakeOres.clear();
+    }
+    private void cleanupPlayer(Player player) {
+        Map<Location, Material> blocks = fakeOres.remove(player.getUniqueId());
+        if (blocks == null) return;
+        for (Location location : blocks.keySet()) {
+            if (location.getWorld().equals(player.getWorld()) && location.getWorld().isChunkLoaded(location.getBlockX() >> 4, location.getBlockZ() >> 4)) {
+                player.sendBlockChange(location, location.getBlock().getBlockData());
+            }
+        }
+    }
+
+    @EventHandler
+    public void onWorldChange(org.bukkit.event.player.PlayerChangedWorldEvent event) {
+        fakeOres.remove(event.getPlayer().getUniqueId());
     }
 }

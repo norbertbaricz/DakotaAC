@@ -1,22 +1,25 @@
 package skypixel.Misc;
 
+import skypixel.compat.PacketAccess;
+import skypixel.compat.Diagnostics;
+import skypixel.config.CheckPolicy;
+import skypixel.config.Lang;
+import skypixel.config.Option;
+
 import com.comphenix.protocol.PacketType;
 import com.comphenix.protocol.ProtocolLibrary;
 import com.comphenix.protocol.ProtocolManager;
-import com.comphenix.protocol.events.PacketAdapter;
+import skypixel.compat.CompatibleAdapter;
 import com.comphenix.protocol.events.PacketContainer;
 import com.comphenix.protocol.events.PacketEvent;
 import com.comphenix.protocol.wrappers.EnumWrappers;
 import com.comphenix.protocol.wrappers.Pair;
-import com.comphenix.protocol.wrappers.PlayerInfoData;
-import com.comphenix.protocol.wrappers.WrappedChatComponent;
 import com.comphenix.protocol.wrappers.WrappedGameProfile;
-import com.comphenix.protocol.wrappers.WrappedPositionMoveRotation;
+
 import org.bukkit.Bukkit;
 import org.bukkit.GameMode;
 import org.bukkit.Location;
 import org.bukkit.Material;
-import org.bukkit.entity.EntityType;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
@@ -28,7 +31,6 @@ import skypixel.dakotaAC;
 
 import java.util.Arrays;
 import java.util.Collections;
-import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.Map;
@@ -36,39 +38,51 @@ import java.util.Random;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
 
-/**
- * Client-side two-stage AntiBot check for Paper 1.21.11 / ProtocolLib 5.5.0-SNAPSHOT.
- * The fake players only exist for the tested client; no Bukkit entities are created.
- */
+/** Original detection formulas; annotated defaults below are loaded from Modules.AntiBot. */
 public class AntiBot implements Listener {
+    @Option(value = "bot-boots", minSize = 1)
+    private static volatile Material[] BOT_BOOTS = {Material.DIAMOND_BOOTS, Material.IRON_BOOTS, Material.CHAINMAIL_BOOTS, Material.LEATHER_BOOTS};
 
-    // =========================================================
-    // --- Easy-to-tune thresholds ---
-    // =========================================================
+    @Option(value = "bot-leggings", minSize = 1)
+    private static volatile Material[] BOT_LEGGINGS = {Material.DIAMOND_LEGGINGS, Material.IRON_LEGGINGS, Material.CHAINMAIL_LEGGINGS, Material.LEATHER_LEGGINGS};
 
-    // Setari Nivel 1 (Bot rotativ)
-    private static final int LEVEL_ONE_HITS_TO_ADVANCE = 5;
-    private static final long LEVEL_ONE_TIMEOUT_MS = 2_000L;
-    private static final double LEVEL_ONE_RADIUS = 1.4D;
-    private static final double LEVEL_ONE_ROTATION_SPEED = 0.3D; // Cat de repede se invarte
-    private static final double LEVEL_ONE_Y_OFFSET = 0.2D;       // Cat de sus sta fata de jucator
+    @Option(value = "bot-chestplates", minSize = 1)
+    private static volatile Material[] BOT_CHESTPLATES = {Material.DIAMOND_CHESTPLATE, Material.IRON_CHESTPLATE, Material.CHAINMAIL_CHESTPLATE, Material.LEATHER_CHESTPLATE};
 
-    // Setari Nivel 2 (Bot urmaritor pe la spate)
-    private static final int LEVEL_TWO_HITS_TO_FLAG = 4;
-    private static final long LEVEL_TWO_TIMEOUT_MS = 60_000L;
-    private static final double LEVEL_TWO_DISTANCE = 3.6D;
-    private static final double LEVEL_TWO_Y_OFFSET = 0.0D;       // Cat de sus sta fata de jucator
+    @Option(value = "bot-helmets", minSize = 1)
+    private static volatile Material[] BOT_HELMETS = {Material.DIAMOND_HELMET, Material.IRON_HELMET, Material.CHAINMAIL_HELMET, Material.LEATHER_HELMET};
 
-    // =========================================================
+    @Option(value = "bot-swords", minSize = 1)
+    private static volatile Material[] BOT_SWORDS = {Material.DIAMOND_SWORD, Material.IRON_SWORD, Material.NETHERITE_SWORD, Material.STONE_SWORD};
+
+    @Option(value = "level-one-hits-to-advance", min = 1.0, max = 1.0E9)
+    private static volatile int LEVEL_ONE_HITS_TO_ADVANCE = 5;
+    @Option(value = "level-one-timeout-ms", min = 1.0, max = 1.0E9)
+    private static volatile long LEVEL_ONE_TIMEOUT_MS = 2_000L;
+    @Option(value = "level-one-radius", min = 0.0, max = 1.0E9)
+    private static volatile double LEVEL_ONE_RADIUS = 1.4D;
+    @Option(value = "level-one-rotation-speed", min = 0.0, max = 1.0E9)
+    private static volatile double LEVEL_ONE_ROTATION_SPEED = 0.3D; 
+    @Option(value = "level-one-y-offset", min = 0.0, max = 1.0E9)
+    private static volatile double LEVEL_ONE_Y_OFFSET = 0.2D;       
+
+    @Option(value = "level-two-hits-to-flag", min = 1.0, max = 1.0E9)
+    private static volatile int LEVEL_TWO_HITS_TO_FLAG = 4;
+    @Option(value = "level-two-timeout-ms", min = 1.0, max = 1.0E9)
+    private static volatile long LEVEL_TWO_TIMEOUT_MS = 60_000L;
+    @Option(value = "level-two-distance", min = 0.0, max = 1.0E9)
+    private static volatile double LEVEL_TWO_DISTANCE = 3.6D;
+    @Option(value = "level-two-y-offset", min = 0.0, max = 1.0E9)
+    private static volatile double LEVEL_TWO_Y_OFFSET = 0.0D;       
 
     private static final ProtocolManager PROTOCOL = ProtocolLibrary.getProtocolManager();
     private static final AtomicInteger NEXT_ENTITY_ID = new AtomicInteger(3_000_000);
     private static final Map<UUID, Session> sessions = new HashMap<>();
-    private static final Map<Integer, UUID> botOwners = new HashMap<>();
+    private static final Map<Integer, UUID> botOwners = new java.util.concurrent.ConcurrentHashMap<>();
     private static final Random RANDOM = new Random();
 
-    // Nume randomizate preluate de la Tracers pentru a le pune pe TAB
-    private static final String[] FAKE_NAMES = {
+    @Option(value = "fake-names", minSize = 1)
+    private static volatile String[] FAKE_NAMES = {
             "SolarFlare", "LunarEcho", "CrimsonBolt", "AzureBlade", "EmberHeart", "VoidWalker",
             "IronTide", "SerpentFang", "StormBreaker", "FrostByte", "ShadowClaw", "RogueWave",
             "BlazeRunner", "NightShade", "QuantumLeap", "Vortexia", "GraveStone", "PhoenixAsh",
@@ -82,42 +96,33 @@ public class AntiBot implements Listener {
     };
 
     public AntiBot() {
-        PROTOCOL.addPacketListener(new PacketAdapter(
+        PROTOCOL.addPacketListener(new CompatibleAdapter(
                 dakotaAC.getPlugin(dakotaAC.class), PacketType.Play.Client.USE_ENTITY
         ) {
             @Override
             public void onPacketReceiving(PacketEvent event) {
                 try {
-                    if (event.getPacket().getEnumEntityUseActions().read(0).getAction()
-                            != EnumWrappers.EntityUseAction.ATTACK) {
+                    if (!PacketAccess.isAttack(event)) {
                         return;
                     }
 
                     int entityId = event.getPacket().getIntegers().read(0);
                     UUID ownerId = botOwners.get(entityId);
                     if (ownerId != null && ownerId.equals(event.getPlayer().getUniqueId())) {
-                        Bukkit.getScheduler().runTask(dakotaAC.getInstance(),
-                                () -> handleBotAttack(event.getPlayer(), entityId));
+                        Diagnostics.sync(() -> handleBotAttack(event.getPlayer(), entityId));
                     }
-                } catch (RuntimeException ignored) {
-                }
+                } catch (RuntimeException | LinkageError ignored) { Diagnostics.report("AntiBot", ignored); }
             }
         });
 
-        // Loop rulat la 1 tick pentru miscare perfecta
         Bukkit.getScheduler().runTaskTimer(dakotaAC.getInstance(), this::tickSessions, 1L, 1L);
     }
 
-    /**
-     * Aceasta este metoda principala care va fi apelata de comanda /report
-     * pentru a declansa fortat testul AntiBot pe un jucator.
-     */
     public static void executeReportCheck(Player player) {
         if (!dakotaAC.isCheckActive("AntiBot") || player == null || !player.isOnline()) {
             return;
         }
 
-        // Daca jucatorul este deja in test sau are gamemode creativ, ignoram
         if (sessions.containsKey(player.getUniqueId()) || player.getGameMode() == GameMode.CREATIVE) {
             return;
         }
@@ -149,10 +154,11 @@ public class AntiBot implements Listener {
     }
 
     private static Location levelTwoLocation(Player player) {
-        Vector direction = player.getLocation().getDirection().setY(0).normalize();
+        Vector direction = player.getLocation().getDirection().setY(0);
         if (direction.lengthSquared() == 0.0D) {
             direction = new Vector(1, 0, 0);
         }
+        direction.normalize();
         return player.getLocation().clone()
                 .add(direction.multiply(-LEVEL_TWO_DISTANCE))
                 .add(0, LEVEL_TWO_Y_OFFSET, 0);
@@ -164,16 +170,16 @@ public class AntiBot implements Listener {
             return;
         }
 
-        session.hits++; // Nu moare instant
+        session.hits++; 
 
         if (session.level == Level.ONE) {
             if (session.hits >= LEVEL_ONE_HITS_TO_ADVANCE) {
                 startLevelTwo(player, session);
             }
         } else {
-            // Suntem in nivelul 2
+
             if (session.hits >= LEVEL_TWO_HITS_TO_FLAG) {
-                flagPlayer.addFlag(player, "AntiBot", "Attacked the level-two inspection player " + session.hits + " times.");
+                flagPlayer.addFlag(player, "AntiBot", Lang.text("checks.AntiBot.name-antibot"), Lang.text("checks.AntiBot.details-attacked-the-level-two-inspection-player-times", "hits", session.hits));
                 endSession(player);
             }
         }
@@ -187,7 +193,8 @@ public class AntiBot implements Listener {
             Player player = Bukkit.getPlayer(entry.getKey());
             Session session = entry.getValue();
 
-            if (player == null || !player.isOnline() || !dakotaAC.isCheckActive("AntiBot")) {
+            if (player == null || !player.isOnline() || !dakotaAC.isCheckActive("AntiBot") || CheckPolicy.exempt(player, "AntiBot")) {
+                if (session.bot != null) botOwners.remove(session.bot.entityId);
                 if (player != null) removeBot(player, session.bot);
                 iterator.remove();
                 continue;
@@ -208,18 +215,17 @@ public class AntiBot implements Listener {
                         Math.sin(session.angle) * LEVEL_ONE_RADIUS
                 );
                 session.bot.location = location;
-                facePlayer(session.bot, player); // Botul se uita la jucator
+                facePlayer(session.bot, player); 
                 updateBotPositionAndRotation(player, session.bot);
 
             } else if (session.level == Level.TWO) {
                 session.bot.location = levelTwoLocation(player);
-                facePlayer(session.bot, player); // Botul se uita la jucator
+                facePlayer(session.bot, player); 
                 updateBotPositionAndRotation(player, session.bot);
             }
         }
     }
 
-    // --- Logica prin care botul pune ochii pe jucator ---
     private static void facePlayer(VirtualBot bot, Player player) {
         Vector direction = player.getEyeLocation().toVector().subtract(bot.location.toVector());
         if (direction.lengthSquared() > 0.0D) {
@@ -230,10 +236,9 @@ public class AntiBot implements Listener {
     private static void updateBotPositionAndRotation(Player player, VirtualBot bot) {
         sendTeleport(player, bot);
         try {
-            // Trimitem pachetul de Head Rotation ca sa intoarca capul fizic
+
             PROTOCOL.sendServerPacket(player, headRotation(bot));
-        } catch (RuntimeException ignored) {
-        }
+        } catch (RuntimeException | LinkageError ignored) { Diagnostics.report("AntiBot", ignored); }
     }
 
     private static void endSession(Player player) {
@@ -250,9 +255,11 @@ public class AntiBot implements Listener {
             PROTOCOL.sendServerPacket(player, spawnPlayer(bot));
             PROTOCOL.sendServerPacket(player, headRotation(bot));
             PROTOCOL.sendServerPacket(player, createRandomEquipment(bot));
-        } catch (RuntimeException exception) {
+        } catch (RuntimeException | LinkageError exception) {
             botOwners.remove(bot.entityId);
-            dakotaAC.getInstance().getLogger().warning("Could not create AntiBot virtual player: " + exception.getMessage());
+            sessions.remove(player.getUniqueId());
+            removeBot(player, bot);
+            Diagnostics.report("AntiBot", exception);
         }
     }
 
@@ -263,38 +270,15 @@ public class AntiBot implements Listener {
         try {
             PROTOCOL.sendServerPacket(player, destroyEntity(bot));
             PROTOCOL.sendServerPacket(player, playerInfoRemove(bot));
-        } catch (RuntimeException ignored) {
-        }
+        } catch (RuntimeException | LinkageError ignored) { Diagnostics.report("AntiBot", ignored); }
     }
 
     private static PacketContainer playerInfoAdd(VirtualBot bot) {
-        PacketContainer packet = PROTOCOL.createPacket(PacketType.Play.Server.PLAYER_INFO);
-        packet.getModifier().writeDefaults();
-        packet.getPlayerInfoActions().write(0, EnumSet.of(
-                EnumWrappers.PlayerInfoAction.ADD_PLAYER,
-                EnumWrappers.PlayerInfoAction.UPDATE_GAME_MODE,
-                EnumWrappers.PlayerInfoAction.UPDATE_LISTED,
-                EnumWrappers.PlayerInfoAction.UPDATE_DISPLAY_NAME
-        ));
-        packet.getPlayerInfoDataLists().write(0, Collections.singletonList(new PlayerInfoData(
-                bot.profile.getUUID(), 0, true, EnumWrappers.NativeGameMode.SURVIVAL,
-                bot.profile, WrappedChatComponent.fromText(bot.profile.getName()), true, 0, null
-        )));
-        return packet;
+        return PacketAccess.playerInfo(bot.profile);
     }
 
     private static PacketContainer spawnPlayer(VirtualBot bot) {
-        PacketContainer packet = PROTOCOL.createPacket(PacketType.Play.Server.SPAWN_ENTITY);
-        packet.getModifier().writeDefaults();
-        packet.getIntegers().write(0, bot.entityId);
-        packet.getUUIDs().write(0, bot.profile.getUUID());
-        packet.getEntityTypeModifier().write(0, EntityType.PLAYER);
-        packet.getDoubles().write(0, bot.location.getX()).write(1, bot.location.getY()).write(2, bot.location.getZ());
-        packet.getBytes().write(0, angleToByte(bot.location.getPitch()))
-                .write(1, angleToByte(bot.location.getYaw()))
-                .write(2, angleToByte(bot.location.getYaw()));
-        packet.getIntegers().write(1, 0);
-        return packet;
+        return PacketAccess.spawnPlayer(bot.entityId, bot.profile, bot.location);
     }
 
     private static PacketContainer headRotation(VirtualBot bot) {
@@ -306,17 +290,8 @@ public class AntiBot implements Listener {
     }
 
     private static void sendTeleport(Player player, VirtualBot bot) {
-        try {
-            PacketContainer packet = PROTOCOL.createPacket(PacketType.Play.Server.ENTITY_TELEPORT);
-            packet.getModifier().writeDefaults();
-            packet.getIntegers().write(0, bot.entityId);
-            packet.getPositionMoveRotation().write(0, WrappedPositionMoveRotation.create(
-                    bot.location.toVector(), new Vector(0, 0, 0), bot.location.getYaw(), bot.location.getPitch()
-            ));
-            packet.getBooleans().write(0, false);
-            PROTOCOL.sendServerPacket(player, packet);
-        } catch (RuntimeException ignored) {
-        }
+        try { PROTOCOL.sendServerPacket(player, PacketAccess.teleport(bot.entityId, bot.location)); }
+        catch (RuntimeException | LinkageError ex) { Diagnostics.report("AntiBot", ex); }
     }
 
     private static PacketContainer createRandomEquipment(VirtualBot bot) {
@@ -324,18 +299,12 @@ public class AntiBot implements Listener {
         packet.getModifier().writeDefaults();
         packet.getIntegers().write(0, bot.entityId);
 
-        Material[] swords = {Material.DIAMOND_SWORD, Material.IRON_SWORD, Material.NETHERITE_SWORD, Material.STONE_SWORD};
-        Material[] helmets = {Material.DIAMOND_HELMET, Material.IRON_HELMET, Material.CHAINMAIL_HELMET, Material.LEATHER_HELMET};
-        Material[] chestplates = {Material.DIAMOND_CHESTPLATE, Material.IRON_CHESTPLATE, Material.CHAINMAIL_CHESTPLATE, Material.LEATHER_CHESTPLATE};
-        Material[] leggings = {Material.DIAMOND_LEGGINGS, Material.IRON_LEGGINGS, Material.CHAINMAIL_LEGGINGS, Material.LEATHER_LEGGINGS};
-        Material[] boots = {Material.DIAMOND_BOOTS, Material.IRON_BOOTS, Material.CHAINMAIL_BOOTS, Material.LEATHER_BOOTS};
-
         packet.getSlotStackPairLists().write(0, Arrays.asList(
-                new Pair<>(EnumWrappers.ItemSlot.MAINHAND, new ItemStack(swords[RANDOM.nextInt(swords.length)])),
-                new Pair<>(EnumWrappers.ItemSlot.HEAD, new ItemStack(helmets[RANDOM.nextInt(helmets.length)])),
-                new Pair<>(EnumWrappers.ItemSlot.CHEST, new ItemStack(chestplates[RANDOM.nextInt(chestplates.length)])),
-                new Pair<>(EnumWrappers.ItemSlot.LEGS, new ItemStack(leggings[RANDOM.nextInt(leggings.length)])),
-                new Pair<>(EnumWrappers.ItemSlot.FEET, new ItemStack(boots[RANDOM.nextInt(boots.length)]))
+                new Pair<>(EnumWrappers.ItemSlot.MAINHAND, new ItemStack(BOT_SWORDS[RANDOM.nextInt(BOT_SWORDS.length)])),
+                new Pair<>(EnumWrappers.ItemSlot.HEAD, new ItemStack(BOT_HELMETS[RANDOM.nextInt(BOT_HELMETS.length)])),
+                new Pair<>(EnumWrappers.ItemSlot.CHEST, new ItemStack(BOT_CHESTPLATES[RANDOM.nextInt(BOT_CHESTPLATES.length)])),
+                new Pair<>(EnumWrappers.ItemSlot.LEGS, new ItemStack(BOT_LEGGINGS[RANDOM.nextInt(BOT_LEGGINGS.length)])),
+                new Pair<>(EnumWrappers.ItemSlot.FEET, new ItemStack(BOT_BOOTS[RANDOM.nextInt(BOT_BOOTS.length)]))
         ));
         return packet;
     }

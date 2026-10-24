@@ -1,8 +1,13 @@
 package skypixel.World;
 
+import skypixel.compat.Diagnostics;
+import skypixel.config.CheckPolicy;
+import skypixel.config.Lang;
+import skypixel.config.Option;
+
 import com.comphenix.protocol.PacketType;
 import com.comphenix.protocol.ProtocolLibrary;
-import com.comphenix.protocol.events.PacketAdapter;
+import skypixel.compat.CompatibleAdapter;
 import com.comphenix.protocol.events.PacketEvent;
 import com.comphenix.protocol.wrappers.EnumWrappers;
 import org.bukkit.FluidCollisionMode;
@@ -24,22 +29,31 @@ import skypixel.dakotaAC;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
+/** Original detection formulas; annotated defaults below are loaded from Modules.Fucker. */
 public class Fucker implements Listener {
 
-    // ==========================================
-    // SETĂRI UȘOR DE REGLAT (EASY TO TUNE)
-    // ==========================================
-    private static final double MAX_BLOCK_REACH = 6.0;
-    private static final double HITBOX_FORGIVENESS = 0.15;
-    private static final int MAX_VIOLATIONS = 3;
-    // ==========================================
+    @Option(value = "reach-center-tolerance", min = 0.0, max = 1.0E9)
+    private static volatile double REACH_CENTER_TOLERANCE = 0.5;
+    @Option(value = "nearby-exemption-distance", min = 0.0, max = 1.0E9)
+    private static volatile double NEARBY_EXEMPTION_DISTANCE = 1.2;
+    @Option(value = "ray-end-margin", min = 0.0, max = 1.0E9)
+    private static volatile double RAY_END_MARGIN = 0.1;
+    @Option(value = "min-wall-ray-distance", min = 0.0, max = 1.0E9)
+    private static volatile double MIN_WALL_RAY_DISTANCE = 0.5;
+
+    @Option(value = "max-block-reach", min = 0.0, max = 1.0E9)
+    private static volatile double MAX_BLOCK_REACH = 6.0;
+    @Option(value = "hitbox-forgiveness", min = 0.0, max = 1.0E9)
+    private static volatile double HITBOX_FORGIVENESS = 0.15;
+    @Option(value = "max-violations", min = 1.0, max = 1.0E9)
+    private static volatile int MAX_VIOLATIONS = 3;
 
     private final ConcurrentHashMap<UUID, ClientAimData> packetAimData = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<UUID, Integer> fuckerVL = new ConcurrentHashMap<>();
 
     public Fucker() {
         ProtocolLibrary.getProtocolManager().addPacketListener(
-                new PacketAdapter(dakotaAC.getPlugin(dakotaAC.class),
+                new CompatibleAdapter(dakotaAC.getPlugin(dakotaAC.class),
                         com.comphenix.protocol.events.ListenerPriority.NORMAL,
                         PacketType.Play.Client.BLOCK_DIG) {
 
@@ -49,9 +63,10 @@ public class Fucker implements Listener {
                             if (!dakotaAC.isCheckActive("Fucker")) return;
 
                             Player player = event.getPlayer();
+                            if (player != null && CheckPolicy.exempt(player, "Fucker")) return;
                             if (player == null || player.getGameMode() == GameMode.CREATIVE) return;
 
-                            EnumWrappers.PlayerDigType action = event.getPacket().getPlayerDigTypes().readSafely(0);
+                            EnumWrappers.PlayerDigType action = event.getPacket().getPlayerDigTypes().read(0);
 
                             if (action == EnumWrappers.PlayerDigType.STOP_DESTROY_BLOCK) {
                                 Location eyeLoc = player.getEyeLocation();
@@ -59,8 +74,8 @@ public class Fucker implements Listener {
                                 packetAimData.put(player.getUniqueId(), new ClientAimData(eyeLoc, direction));
                             }
 
-                        } catch (Exception ex) {
-                            ex.printStackTrace();
+                        } catch (Exception | LinkageError ex) {
+                            Diagnostics.report("Fucker", ex);
                         }
                     }
                 }
@@ -72,6 +87,7 @@ public class Fucker implements Listener {
         if (!dakotaAC.isCheckActive("Fucker")) return;
 
         Player player = event.getPlayer();
+        if (player != null && CheckPolicy.exempt(player, "Fucker")) return;
         if (player.getGameMode() == GameMode.CREATIVE) return;
 
         UUID uuid = player.getUniqueId();
@@ -88,17 +104,12 @@ public class Fucker implements Listener {
         Location blockCenter = targetBlock.getLocation().add(0.5, 0.5, 0.5);
         double distanceToCenter = eyeLoc.distance(blockCenter);
 
-        // --------------------------------------------------------
-        // VERIFICARE 1: Reach
-        // --------------------------------------------------------
-        if (distanceToCenter > MAX_BLOCK_REACH + 0.5) {
+        if (distanceToCenter > MAX_BLOCK_REACH + REACH_CENTER_TOLERANCE) {
             isFlagged = true;
-            flagReason = "Broke block out of range (Reach: " + String.format("%.2f", distanceToCenter) + ").";
+            flagReason = Lang.text("checks.Fucker.details-broke-block-out-of-range-reach", "distance-to-center", String.format(java.util.Locale.ROOT, "%.2f", distanceToCenter));
         }
-        else if (distanceToCenter > 1.2) {
+        else if (distanceToCenter > NEARBY_EXEMPTION_DISTANCE) {
 
-            // FIX PENTRU IARBĂ ȘI FLORI:
-            // Normalizăm blocurile non-solide într-un cub perfect de 1x1x1
             BoundingBox blockBox;
             if (targetBlock.getType().isSolid()) {
                 blockBox = targetBlock.getBoundingBox().expand(HITBOX_FORGIVENESS);
@@ -109,22 +120,17 @@ public class Fucker implements Listener {
                 ).expand(HITBOX_FORGIVENESS);
             }
 
-            // --------------------------------------------------------
-            // VERIFICARE 2: Unghiul (GhostBreak / Aura)
-            // --------------------------------------------------------
             RayTraceResult boxHit = blockBox.rayTrace(eyeLoc.toVector(), direction, MAX_BLOCK_REACH);
 
             if (boxHit == null) {
                 isFlagged = true;
-                flagReason = "Broke block without looking at it (GhostBreak).";
+                flagReason = Lang.text("checks.Fucker.details-broke-block-without-looking-at-it-ghostbreak");
             } else {
-                // --------------------------------------------------------
-                // VERIFICARE 3: Ziduri (Fucker / Wall)
-                // --------------------------------------------------------
-                double distanceToHit = boxHit.getHitPosition().distance(eyeLoc.toVector());
-                double safeRayDistance = distanceToHit - 0.1;
 
-                if (safeRayDistance > 0.5) {
+                double distanceToHit = boxHit.getHitPosition().distance(eyeLoc.toVector());
+                double safeRayDistance = distanceToHit - RAY_END_MARGIN;
+
+                if (safeRayDistance > MIN_WALL_RAY_DISTANCE) {
                     RayTraceResult wallHit = player.getWorld().rayTraceBlocks(
                             eyeLoc,
                             direction,
@@ -137,7 +143,7 @@ public class Fucker implements Listener {
                         Block hitBlock = wallHit.getHitBlock();
                         if (hitBlock.getType().isSolid()) {
                             isFlagged = true;
-                            flagReason = "Broke " + targetBlock.getType().name() + " through a solid block (" + hitBlock.getType().name() + ").";
+                            flagReason = Lang.text("checks.Fucker.details-broke-through-a-solid-block", "name", targetBlock.getType().name(), "name-2", hitBlock.getType().name());
                         }
                     }
                 }
@@ -149,8 +155,8 @@ public class Fucker implements Listener {
             fuckerVL.put(uuid, vl);
 
             if (vl >= MAX_VIOLATIONS) {
-                flagPlayer.addFlag(player, "Fucker", flagReason);
-                event.setCancelled(true);
+                flagPlayer.addFlag(player, "Fucker", Lang.text("checks.Fucker.name-fucker"), flagReason);
+                if (CheckPolicy.cancel("Fucker")) event.setCancelled(true);
                 fuckerVL.put(uuid, MAX_VIOLATIONS - 1);
             }
         } else {

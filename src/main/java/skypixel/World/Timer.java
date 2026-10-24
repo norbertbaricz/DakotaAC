@@ -1,10 +1,14 @@
 package skypixel.World;
 
+import skypixel.compat.Diagnostics;
+import skypixel.config.CheckPolicy;
+import skypixel.config.Lang;
+import skypixel.config.Option;
+
 import com.comphenix.protocol.PacketType;
 import com.comphenix.protocol.ProtocolLibrary;
-import com.comphenix.protocol.events.PacketAdapter;
+import skypixel.compat.CompatibleAdapter;
 import com.comphenix.protocol.events.PacketEvent;
-import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
@@ -18,26 +22,30 @@ import skypixel.dakotaAC;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
+/** Original detection formulas; annotated defaults below are loaded from Modules.Timer. */
 public class Timer implements Listener {
 
-    // ==========================================
-    // SETĂRI UȘOR DE REGLAT (EASY TO TUNE)
-    // ==========================================
-    private static final long PACKET_COST_MS = 50L; // Cât "costă" un pachet (50ms = 20 TPS)
-    private static final long MAX_LAG_BUFFER = 150L; // Cât lag permitem jucătorului să recupereze (3 pachete)
-    private static final long FLAG_THRESHOLD = -250L; // Cât de mult poate pica sub zero înainte de flag (5 pachete trimise prea repede)
+    @Option(value = "reset-after-idle-ms", min = 1.0, max = 1.0E9)
+    private static volatile long RESET_AFTER_IDLE_MS = 2000L;
 
-    private static final int MAX_VIOLATIONS = 3; // Câte alarme așteptăm înainte să îl tragem înapoi vizual
-    // ==========================================
+    @Option(value = "packet-cost-ms", min = 1.0, max = 1.0E9)
+    private static volatile long PACKET_COST_MS = 50L; 
+    @Option(value = "max-lag-buffer", min = 1.0, max = 1.0E9)
+    private static volatile long MAX_LAG_BUFFER = 150L; 
+    @Option(value = "flag-threshold", min = -1.0E9, max = -1.0)
+    private static volatile long FLAG_THRESHOLD = -250L; 
+
+    @Option(value = "max-violations", min = 1.0, max = 1.0E9)
+    private static volatile int MAX_VIOLATIONS = 3; 
 
     private final ConcurrentHashMap<UUID, Long> lastPacketTime = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<UUID, Long> packetBalance = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<UUID, Integer> violations = new ConcurrentHashMap<>();
 
     public Timer() {
-        // Ascultăm absolut toată familia de pachete de mișcare (Flying)
+
         ProtocolLibrary.getProtocolManager().addPacketListener(
-                new PacketAdapter(dakotaAC.getPlugin(dakotaAC.class),
+                new CompatibleAdapter(dakotaAC.getPlugin(dakotaAC.class),
                         com.comphenix.protocol.events.ListenerPriority.NORMAL,
                         PacketType.Play.Client.FLYING,
                         PacketType.Play.Client.POSITION,
@@ -50,6 +58,7 @@ public class Timer implements Listener {
                             if (!dakotaAC.isCheckActive("Timer")) return;
 
                             Player player = event.getPlayer();
+                            if (player != null && CheckPolicy.exempt(player, "Timer")) return;
                             if (player == null) return;
                             UUID uuid = player.getUniqueId();
 
@@ -59,48 +68,39 @@ public class Timer implements Listener {
 
                             lastPacketTime.put(uuid, now);
 
-                            // Dacă diferența este prea mare (ex: un lag spike masiv sau a schimbat dimensiunea), ignorăm pachetul și resetăm
-                            if (diff > 2000L) {
+                            if (diff > RESET_AFTER_IDLE_MS) {
                                 packetBalance.put(uuid, 0L);
                                 return;
                             }
 
-                            // 1. CALCULUL BALANȚEI
                             long balance = packetBalance.getOrDefault(uuid, 0L);
-                            balance += diff; // Adăugăm timpul real care a trecut de la ultimul pachet
-                            balance -= PACKET_COST_MS; // Scădem prețul pachetului actual
+                            balance += diff; 
+                            balance -= PACKET_COST_MS; 
 
-                            // 2. TĂIEREA LAG-ULUI ACUMULAT
-                            // Dacă a lagat și a acumulat prea mult "timp", îl tăiem.
-                            // Hack-urile avansate creează lag fals tocmai ca să facă Timer pe banii acumulați.
                             if (balance > MAX_LAG_BUFFER) {
                                 balance = MAX_LAG_BUFFER;
                             }
 
-                            // 3. DETECȚIA SUPREMĂ (TIMER HACK)
-                            // A cheltuit mai mult timp decât a produs?
                             if (balance < FLAG_THRESHOLD) {
 
-                                // Anulăm pachetul! Literalmente anulăm trecerea timpului pentru el!
-                                event.setCancelled(true);
+                                if (CheckPolicy.cancel("Timer")) event.setCancelled(true);
 
-                                // Nu îl lăsăm să scadă la infinit în minus
                                 balance = FLAG_THRESHOLD;
 
                                 int vl = violations.getOrDefault(uuid, 0) + 1;
                                 violations.put(uuid, vl);
 
                                 if (vl > MAX_VIOLATIONS) {
-                                    Bukkit.getScheduler().runTask(dakotaAC.getPlugin(dakotaAC.class), () -> {
+                                    Diagnostics.sync(() -> {
                                         if (player.isOnline() && !player.isDead()) {
-                                            flagPlayer.addFlag(player, "Timer", "Sent packets too fast (Game speed artificially increased).");
+                                            flagPlayer.addFlag(player, "Timer", Lang.text("checks.Timer.name-timer"), Lang.text("checks.Timer.details-sent-packets-too-fast-game-speed-artificially-increased"));
                                         }
                                     });
-                                    // Resetăm VL-ul ca să nu facem spam infinit
+
                                     violations.put(uuid, 0);
                                 }
                             } else {
-                                // Scădem suspiciunea dacă s-a potolit și se joacă legitim
+
                                 int vl = violations.getOrDefault(uuid, 0);
                                 if (vl > 0 && balance > (FLAG_THRESHOLD / 2)) {
                                     violations.put(uuid, vl - 1);
@@ -109,17 +109,13 @@ public class Timer implements Listener {
 
                             packetBalance.put(uuid, balance);
 
-                        } catch (Exception ex) {
-                            ex.printStackTrace();
+                        } catch (Exception | LinkageError ex) {
+                            Diagnostics.report("Timer", ex);
                         }
                     }
                 }
         );
     }
-
-    // ========================================================
-    // PREVENIREA ALARMELOR FALSE (TELEPORT / RESPAWN)
-    // ========================================================
 
     @EventHandler(priority = EventPriority.MONITOR)
     public void onPlayerTeleport(PlayerTeleportEvent event) {

@@ -1,10 +1,15 @@
 package skypixel.Movement;
 
+import skypixel.compat.PacketAccess;
+import skypixel.compat.Diagnostics;
+import skypixel.config.CheckPolicy;
+import skypixel.config.Lang;
+import skypixel.config.Option;
+
 import com.comphenix.protocol.PacketType;
 import com.comphenix.protocol.ProtocolLibrary;
-import com.comphenix.protocol.events.PacketAdapter;
+import skypixel.compat.CompatibleAdapter;
 import com.comphenix.protocol.events.PacketEvent;
-import org.bukkit.Bukkit;
 import org.bukkit.GameMode;
 import org.bukkit.Location;
 import org.bukkit.Material;
@@ -23,19 +28,39 @@ import skypixel.dakotaAC;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
+/** Original detection formulas; annotated defaults below are loaded from Modules.Speed. */
 public class Speed implements Listener {
 
-    // ==========================================
-    // SETĂRI BUFFER (FĂRĂ FIZICĂ INSTABILĂ)
-    // ==========================================
-    private static final double BASE_SPEED_LIMIT = 0.36; // Acoperă un sprint-jump perfect
-    private static final double MAX_BUFFER = 1.5; // Limita până la care iertăm impulsul
-    private static final double BUFFER_DECAY = 0.05; // Cât de repede se șterge suspiciunea
+    @Option(value = "max-world-coordinate", min = 0.0, max = 1.0E9)
+    private static volatile double MAX_WORLD_COORDINATE = 3.0E7;
+    @Option(value = "max-tracked-movement", min = 0.0, max = 1.0E9)
+    private static volatile double MAX_TRACKED_MOVEMENT = 10.0;
+    @Option(value = "damage-immunity-ticks", min = 1.0, max = 1.0E9)
+    private static volatile int DAMAGE_IMMUNITY_TICKS = 10;
+    @Option(value = "velocity-exemption", min = 0.0, max = 1.0E9)
+    private static volatile double VELOCITY_EXEMPTION = 0.05;
+    @Option(value = "speed-potion-allowance", min = 0.0, max = 1.0E9)
+    private static volatile double SPEED_POTION_ALLOWANCE = 0.06;
+    @Option(value = "instant-speed-multiplier", min = 0.0, max = 1.0E9)
+    private static volatile double INSTANT_SPEED_MULTIPLIER = 2.5;
+    @Option(value = "post-flag-buffer", min = 0.0, max = 1.0E9)
+    private static volatile double POST_FLAG_BUFFER = 0.5;
+    @Option(value = "teleport-immunity-ms", min = 1.0, max = 1.0E9)
+    private static volatile long TELEPORT_IMMUNITY_MS = 1000L;
 
-    private static final double ICE_MULTIPLIER = 1.8;
-    private static final double SLAB_MULTIPLIER = 1.3;
-    private static final double HEADHITTER_MULTIPLIER = 1.5;
-    // ==========================================
+    @Option(value = "base-speed-limit", min = 0.0, max = 1.0E9)
+    private static volatile double BASE_SPEED_LIMIT = 0.36; 
+    @Option(value = "max-buffer", min = 0.0, max = 1.0E9)
+    private static volatile double MAX_BUFFER = 1.5; 
+    @Option(value = "buffer-decay", min = 0.0, max = 1.0E9)
+    private static volatile double BUFFER_DECAY = 0.05; 
+
+    @Option(value = "ice-multiplier", min = 0.0, max = 1.0E9)
+    private static volatile double ICE_MULTIPLIER = 1.8;
+    @Option(value = "slab-multiplier", min = 0.0, max = 1.0E9)
+    private static volatile double SLAB_MULTIPLIER = 1.3;
+    @Option(value = "headhitter-multiplier", min = 0.0, max = 1.0E9)
+    private static volatile double HEADHITTER_MULTIPLIER = 1.5;
 
     private final ConcurrentHashMap<UUID, Double> speedBuffer = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<UUID, double[]> lastPosMap = new ConcurrentHashMap<>();
@@ -44,7 +69,7 @@ public class Speed implements Listener {
 
     public Speed() {
         ProtocolLibrary.getProtocolManager().addPacketListener(
-                new PacketAdapter(dakotaAC.getPlugin(dakotaAC.class),
+                new CompatibleAdapter(dakotaAC.getPlugin(dakotaAC.class),
                         com.comphenix.protocol.events.ListenerPriority.NORMAL,
                         PacketType.Play.Client.POSITION,
                         PacketType.Play.Client.POSITION_LOOK) {
@@ -55,15 +80,16 @@ public class Speed implements Listener {
                             if (!dakotaAC.isCheckActive("Speed")) return;
 
                             Player player = event.getPlayer();
+                            if (player != null && CheckPolicy.exempt(player, "Speed")) return;
                             if (player == null) return;
                             UUID uuid = player.getUniqueId();
 
-                            double toX = event.getPacket().getDoubles().readSafely(0);
-                            double toY = event.getPacket().getDoubles().readSafely(1);
-                            double toZ = event.getPacket().getDoubles().readSafely(2);
+                            double toX = PacketAccess.coordinate(event.getPacket(), 0);
+                            double toY = PacketAccess.coordinate(event.getPacket(), 1);
+                            double toZ = PacketAccess.coordinate(event.getPacket(), 2);
 
-                            if (Double.isNaN(toX) || Double.isNaN(toZ) || Math.abs(toX) > 3.0E7 || Math.abs(toZ) > 3.0E7) {
-                                event.setCancelled(true);
+                            if (Double.isNaN(toX) || Double.isNaN(toZ) || Math.abs(toX) > MAX_WORLD_COORDINATE || Math.abs(toZ) > MAX_WORLD_COORDINATE) {
+                                if (CheckPolicy.cancel("Speed")) event.setCancelled(true);
                                 return;
                             }
 
@@ -78,8 +104,7 @@ public class Speed implements Listener {
                             double deltaZ = toZ - fromPos[2];
                             final double deltaXZ = Math.hypot(deltaX, deltaZ);
 
-                            // Blink-ul gestionează teleportările, noi doar ignorăm
-                            if (deltaXZ > 10.0 || deltaXZ == 0.0) {
+                            if (deltaXZ > MAX_TRACKED_MOVEMENT || deltaXZ == 0.0) {
                                 lastPosMap.put(uuid, new double[]{toX, toY, toZ});
                                 return;
                             }
@@ -87,17 +112,15 @@ public class Speed implements Listener {
                             final double[] safeFromPos = {fromPos[0], fromPos[1], fromPos[2]};
                             lastPosMap.put(uuid, new double[]{toX, toY, toZ});
 
-                            Bukkit.getScheduler().runTask(dakotaAC.getPlugin(dakotaAC.class), () -> {
+                            Diagnostics.sync(() -> {
                                 if (!player.isOnline() || player.isDead()) return;
 
-                                // Imunitate teleport
                                 if (teleportGrace.containsKey(uuid) && teleportGrace.get(uuid) > System.currentTimeMillis()) {
                                     speedBuffer.put(uuid, 0.0);
                                     lastSafeLocation.put(uuid, player.getLocation());
                                     return;
                                 }
 
-                                // Imunitate zbor/vehicul
                                 if (player.isFlying() || player.getGameMode() == GameMode.CREATIVE || player.getGameMode() == GameMode.SPECTATOR ||
                                         player.isInsideVehicle() || player.isSwimming() || player.isGliding() || player.isSleeping()) {
                                     speedBuffer.put(uuid, 0.0);
@@ -105,8 +128,7 @@ public class Speed implements Listener {
                                     return;
                                 }
 
-                                // Imunitate PvP (Knockback)
-                                if (player.getNoDamageTicks() > 10 || Math.hypot(player.getVelocity().getX(), player.getVelocity().getZ()) > 0.05) {
+                                if (player.getNoDamageTicks() > DAMAGE_IMMUNITY_TICKS || Math.hypot(player.getVelocity().getX(), player.getVelocity().getZ()) > VELOCITY_EXEMPTION) {
                                     speedBuffer.put(uuid, 0.0);
                                     lastSafeLocation.put(uuid, player.getLocation());
                                     return;
@@ -117,14 +139,12 @@ public class Speed implements Listener {
 
                                 double speedLimit = BASE_SPEED_LIMIT;
 
-                                // Poțiuni
                                 for (PotionEffect effect : player.getActivePotionEffects()) {
                                     if (effect.getType().equals(PotionEffectType.SPEED)) {
-                                        speedLimit += (0.06 * (effect.getAmplifier() + 1));
+                                        speedLimit += (SPEED_POTION_ALLOWANCE * (effect.getAmplifier() + 1));
                                     }
                                 }
 
-                                // Mediu
                                 boolean onIce = isBlockIce(fromLoc.clone().subtract(0, 0.1, 0).getBlock().getType()) ||
                                         isBlockIce(fromLoc.clone().subtract(0, 1.0, 0).getBlock().getType());
                                 boolean underBlock = !fromLoc.clone().add(0, 2.0, 0).getBlock().getType().isAir();
@@ -140,35 +160,32 @@ public class Speed implements Listener {
 
                                 double buffer = speedBuffer.getOrDefault(uuid, 0.0);
 
-                                // LOGICA DE BUFFER: Nu dăm flag instant, adunăm excesul.
                                 if (deltaXZ > speedLimit) {
                                     buffer += (deltaXZ - speedLimit);
 
-                                    // Doar dacă e ceva complet inuman dăm flag instant
-                                    if (deltaXZ > speedLimit * 2.5) {
-                                        flagPlayer.addFlag(player, "Speed (Instant)", "Absurd momentum (" + String.format("%.2f", deltaXZ) + ")");
-                                        player.teleport(lastSafeLocation.getOrDefault(uuid, fromLoc), PlayerTeleportEvent.TeleportCause.PLUGIN);
+                                    if (deltaXZ > speedLimit * INSTANT_SPEED_MULTIPLIER) {
+                                        flagPlayer.addFlag(player, "Speed", Lang.text("checks.Speed.name-speed-instant"), Lang.text("checks.Speed.details-absurd-momentum", "delta-x-z", String.format(java.util.Locale.ROOT, "%.2f", deltaXZ)));
+                                        if (CheckPolicy.setbacks("Speed")) player.teleport(lastSafeLocation.getOrDefault(uuid, fromLoc), PlayerTeleportEvent.TeleportCause.PLUGIN);
                                         speedBuffer.put(uuid, 0.0);
                                         return;
                                     }
 
-                                    // Dacă s-a acumulat prea mult exces (BHOP continuu)
                                     if (buffer > MAX_BUFFER) {
-                                        flagPlayer.addFlag(player, "Speed (Strafe/Bhop)", "Sustained unnatural speed (Buffer: " + String.format("%.2f", buffer) + ")");
-                                        player.teleport(lastSafeLocation.getOrDefault(uuid, fromLoc), PlayerTeleportEvent.TeleportCause.PLUGIN);
-                                        buffer = 0.5; // Resetăm parțial pentru a nu spama
+                                        flagPlayer.addFlag(player, "Speed", Lang.text("checks.Speed.name-speed-strafe-bhop"), Lang.text("checks.Speed.details-sustained-unnatural-speed-buffer", "buffer", String.format(java.util.Locale.ROOT, "%.2f", buffer)));
+                                        if (CheckPolicy.setbacks("Speed")) player.teleport(lastSafeLocation.getOrDefault(uuid, fromLoc), PlayerTeleportEvent.TeleportCause.PLUGIN);
+                                        buffer = POST_FLAG_BUFFER; 
                                     }
                                 } else {
-                                    // Dacă viteza e legală, scurtăm buffer-ul (iertăm)
+
                                     buffer = Math.max(0.0, buffer - BUFFER_DECAY);
-                                    lastSafeLocation.put(uuid, toLoc); // Salvăm locația de siguranță DOAR când e curat
+                                    lastSafeLocation.put(uuid, toLoc); 
                                 }
 
                                 speedBuffer.put(uuid, buffer);
                             });
 
-                        } catch (Exception ex) {
-                            ex.printStackTrace();
+                        } catch (Exception | LinkageError ex) {
+                            Diagnostics.report("Speed", ex);
                         }
                     }
                 }
@@ -180,7 +197,7 @@ public class Speed implements Listener {
         if (event.isCancelled()) return;
         UUID uuid = event.getPlayer().getUniqueId();
         if (event.getTo() != null) {
-            teleportGrace.put(uuid, System.currentTimeMillis() + 1000L);
+            teleportGrace.put(uuid, System.currentTimeMillis() + TELEPORT_IMMUNITY_MS);
             lastSafeLocation.put(uuid, event.getTo());
             lastPosMap.remove(uuid);
         }
@@ -189,7 +206,7 @@ public class Speed implements Listener {
     @EventHandler(priority = EventPriority.MONITOR)
     public void onPlayerRespawn(PlayerRespawnEvent event) {
         UUID uuid = event.getPlayer().getUniqueId();
-        teleportGrace.put(uuid, System.currentTimeMillis() + 1000L);
+        teleportGrace.put(uuid, System.currentTimeMillis() + TELEPORT_IMMUNITY_MS);
         lastSafeLocation.put(uuid, event.getRespawnLocation());
         lastPosMap.remove(uuid);
         speedBuffer.remove(uuid);

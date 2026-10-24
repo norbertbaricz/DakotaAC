@@ -1,65 +1,52 @@
 package skypixel.Notification;
 
 import org.bukkit.Bukkit;
-import org.bukkit.ChatColor;
 import org.bukkit.entity.Player;
+import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
+import org.bukkit.event.player.PlayerQuitEvent;
+import skypixel.config.Lang;
 import skypixel.dakotaAC;
-
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
 public class Violation implements Listener {
+    // Preserve session-long totals across disconnects and configuration reloads.
+    private static final ConcurrentHashMap<UUID, Long> totalFlags = new ConcurrentHashMap<>();
 
-    // Stocăm flag-urile permanent în memoria RAM a serverului (până la restart).
-    // Folosim ConcurrentHashMap deoarece apelurile pot veni de pe thread-ul asincron (Netty).
-    private static final ConcurrentHashMap<UUID, Integer> totalFlags = new ConcurrentHashMap<>();
-
-    /**
-     * Adaugă un flag jucătorului și verifică dacă a atins multiplele pentru Kick sau Ban.
-     */
-    public static void addViolation(Player player, String hackType, String details) {
-        UUID uuid = player.getUniqueId();
-
-        // Creștem numărul de flag-uri cu 1
-        int flags = totalFlags.getOrDefault(uuid, 0) + 1;
-        totalFlags.put(uuid, flags);
-
-        // 1. Verificăm BAN-ul folosind Multiplu (%) pentru execuții infinite (ex: la 2000, 4000, 6000)
-        // Oprim execuția cu 'return' pentru ca jucătorul să nu primească și Kick și Ban în același timp.
-        if (dakotaAC.isAutoBan() && (flags % dakotaAC.getMaxBanFlags() == 0)) {
-            executePunishment(player, hackType, details, "BAN");
-            return;
+    public static void addViolation(Player player, String check, String hackType, String details) {
+        dakotaAC plugin = dakotaAC.getInstance();
+        int weight = Math.max(1, Math.min(1000000, plugin.getConfig().getInt("Modules." + check + ".flag-weight", 1)));
+        long before = totalFlags.getOrDefault(player.getUniqueId(), 0L);
+        long flags = before > Long.MAX_VALUE - weight ? Long.MAX_VALUE : before + weight;
+        totalFlags.put(player.getUniqueId(), flags);
+        if (!plugin.getConfig().getBoolean("Modules." + check + ".punish", true)) return;
+        // With weight 1 this is exactly the original multiple-based behavior. Larger weights cannot skip a boundary.
+        if (dakotaAC.isAutoBan() && crossed(before, flags, dakotaAC.getMaxBanFlags())) {
+            executePunishment(player, hackType, details, true); return;
         }
+        if (dakotaAC.isAutoKick() && crossed(before, flags, dakotaAC.getMaxKickFlags())) executePunishment(player, hackType, details, false);
+    }
 
-        // 2. Verificăm KICK-ul folosind Multiplu (%) (ex: la 800, 1600, 2400)
-        if (dakotaAC.isAutoKick() && (flags % dakotaAC.getMaxKickFlags() == 0)) {
-            executePunishment(player, hackType, details, "KICK");
+    public static boolean crossed(long before, long after, int interval) {
+        return interval > 0 && after / interval > before / interval;
+    }
+
+    public static long getFlags(UUID uuid) { return totalFlags.getOrDefault(uuid, 0L); }
+
+    private static void executePunishment(Player player, String hackType, String details, boolean ban) {
+        dakotaAC plugin = dakotaAC.getInstance();
+        Object[] placeholders = {"player", player.getName(), "hack", hackType, "details", details};
+        if (ban) {
+            String command = Lang.format(plugin.getConfig().getString("Punishments.ban-command", ""),
+                    java.util.Map.of("player", player.getName(), "hack", hackType, "details", details));
+            if (!command.isBlank()) Bukkit.dispatchCommand(Bukkit.getConsoleSender(), command);
+        }
+        player.kickPlayer(Lang.text("punishments.reason", placeholders));
+        if (plugin.getConfig().getBoolean(ban ? "Punishments.broadcast-bans" : "Punishments.broadcast-kicks", true)) {
+            Bukkit.broadcastMessage(Lang.text(ban ? "punishments.ban-broadcast" : "punishments.kick-broadcast", placeholders));
         }
     }
 
-    /**
-     * Execută pedeapsa. Memoria din HashMap NU se șterge, deci punctele își continuă numărătoarea!
-     */
-    private static void executePunishment(Player player, String hackType, String details, String punishmentType) {
-
-        String reason = ChatColor.translateAlternateColorCodes('&',
-                "&c&lDakotaAC Security\n\n" +
-                        "&7You have been automatically removed from the server.\n" +
-                        "&7Reason: &c" + hackType + "\n" +
-                        "&7Details: &8" + details);
-
-        if (punishmentType.equals("BAN")) {
-            Bukkit.dispatchCommand(Bukkit.getConsoleSender(), "ban " + player.getName() + " [DakotaAC] " + hackType + " - " + details);
-            player.kickPlayer(reason);
-            Bukkit.broadcastMessage(ChatColor.translateAlternateColorCodes('&', "&8[&cDakotaAC&8] &c" + player.getName() + " &7was banned for &c" + hackType + "&7."));
-        } else {
-            player.kickPlayer(reason);
-            Bukkit.broadcastMessage(ChatColor.translateAlternateColorCodes('&', "&8[&cDakotaAC&8] &c" + player.getName() + " &7was kicked for &c" + hackType + "&7."));
-        }
-    }
-
-    // Am eliminat complet evenimentele de PlayerJoin și PlayerQuit.
-    // Odată înregistrat în `totalFlags`, jucătorul rămâne acolo cu punctele sale
-    // exact ca într-o memorie permanentă a sesiunii!
+    @EventHandler public void onQuit(PlayerQuitEvent event) { flagPlayer.clearCache(event.getPlayer().getUniqueId()); }
 }

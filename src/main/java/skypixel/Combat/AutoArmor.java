@@ -1,9 +1,13 @@
 package skypixel.Combat;
 
-import com.comphenix.protocol.PacketType;
+import skypixel.compat.PacketAccess;
+import skypixel.compat.Diagnostics;
+import skypixel.config.CheckPolicy;
+import skypixel.config.Lang;
+import skypixel.config.Option;
+
 import com.comphenix.protocol.ProtocolLibrary;
 import com.comphenix.protocol.ProtocolManager;
-import com.comphenix.protocol.events.PacketContainer;
 import org.bukkit.Bukkit;
 import org.bukkit.GameMode;
 import org.bukkit.Material;
@@ -28,19 +32,25 @@ import java.util.Random;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
+/** Original detection formulas; annotated defaults below are loaded from Modules.AutoArmor. */
 public class AutoArmor implements Listener {
 
-    // =========================================================
-    // --- Easy-to-tune thresholds ---
-    // =========================================================
-    private static final long DECOY_INTERVAL_TICKS = 80L;  // Testăm la fiecare 4 secunde
-    private static final long DECOY_DURATION_TICKS = 10L;  // Momeala stă 500ms (Așteptăm să muște hack-ul cu delay)
-    private static final long INHUMAN_REACTION_MS = 400L;  // Niciun om nu poate observa și da click în sub 400ms
+    @Option(value = "initial-delay-ticks", min = 0.0, max = 1.0E9)
+    private static volatile long INITIAL_DELAY_TICKS = 100L;
 
-    private static final int SEQUENTIAL_EQUIP_MS = 60;
-    private static final int PICKUP_EQUIP_MS = 150;
-    private static final int BREAK_EQUIP_MS = 150;
-    // =========================================================
+    @Option(value = "decoy-interval-ticks", min = 1.0, max = 1.0E9)
+    private static volatile long DECOY_INTERVAL_TICKS = 80L;  
+    @Option(value = "decoy-duration-ticks", min = 1.0, max = 1.0E9)
+    private static volatile long DECOY_DURATION_TICKS = 10L;  
+    @Option(value = "inhuman-reaction-ms", min = 1.0, max = 1.0E9)
+    private static volatile long INHUMAN_REACTION_MS = 400L;  
+
+    @Option(value = "sequential-equip-ms", min = 1.0, max = 1.0E9)
+    private static volatile int SEQUENTIAL_EQUIP_MS = 60;
+    @Option(value = "pickup-equip-ms", min = 1.0, max = 1.0E9)
+    private static volatile int PICKUP_EQUIP_MS = 150;
+    @Option(value = "break-equip-ms", min = 1.0, max = 1.0E9)
+    private static volatile int BREAK_EQUIP_MS = 150;
 
     private static final ProtocolManager PROTOCOL = ProtocolLibrary.getProtocolManager();
     private static final ConcurrentHashMap<UUID, Long> lastPickup = new ConcurrentHashMap<>();
@@ -55,6 +65,7 @@ public class AutoArmor implements Listener {
             if (!dakotaAC.isCheckActive("AutoArmor")) return;
 
             for (Player player : Bukkit.getOnlinePlayers()) {
+                if (CheckPolicy.exempt(player, "AutoArmor")) continue;
                 if (player.getGameMode() == GameMode.CREATIVE || player.getGameMode() == GameMode.SPECTATOR || player.isDead()) {
                     continue;
                 }
@@ -80,7 +91,7 @@ public class AutoArmor implements Listener {
 
                 ItemStack decoyItem = generateSmartDecoy(player);
 
-                sendFakeItem(player, randomSlot, decoyItem);
+                if (!sendFakeItem(player, randomSlot, decoyItem)) continue;
                 activeDecoys.put(uuid, new DecoyData(randomSlot, System.currentTimeMillis()));
 
                 Bukkit.getScheduler().runTaskLater(dakotaAC.getInstance(), () -> {
@@ -92,7 +103,7 @@ public class AutoArmor implements Listener {
                     }
                 }, DECOY_DURATION_TICKS);
             }
-        }, 100L, DECOY_INTERVAL_TICKS);
+        }, INITIAL_DELAY_TICKS, DECOY_INTERVAL_TICKS);
     }
 
     private ItemStack generateSmartDecoy(Player player) {
@@ -124,37 +135,16 @@ public class AutoArmor implements Listener {
         ItemStack decoy = new ItemStack(Material.valueOf(materialPrefix + suffix));
         ItemMeta meta = decoy.getItemMeta();
         if (meta != null) {
-            meta.setDisplayName("§cSystem Decoy");
+            meta.setDisplayName(Lang.text("checks.AutoArmor.message-system-decoy"));
             meta.setUnbreakable(true);
             decoy.setItemMeta(meta);
         }
         return decoy;
     }
 
-    private static void sendFakeItem(Player player, int slot, ItemStack item) {
-        try {
-            PacketContainer packet = PROTOCOL.createPacket(PacketType.Play.Server.SET_SLOT);
-
-            if (packet.getIntegers().size() > 0) {
-                packet.getIntegers().writeSafely(0, 0);
-            } else if (packet.getBytes().size() > 0) {
-                packet.getBytes().writeSafely(0, (byte) 0);
-            }
-
-            if (packet.getIntegers().size() > 1) {
-                packet.getIntegers().writeSafely(1, 0);
-            }
-
-            if (packet.getIntegers().size() > 2) {
-                packet.getIntegers().writeSafely(2, slot);
-            } else if (packet.getShorts().size() > 0) {
-                packet.getShorts().writeSafely(0, (short) slot);
-            }
-
-            packet.getItemModifier().writeSafely(0, item);
-            PROTOCOL.sendServerPacket(player, packet);
-        } catch (Exception ignored) {
-        }
+    private static boolean sendFakeItem(Player player, int slot, ItemStack item) {
+        try { PacketAccess.fakeInventorySlot(player, slot, item); return true; }
+        catch (RuntimeException | LinkageError ex) { Diagnostics.report("AutoArmor", ex); return false; }
     }
 
     @EventHandler(priority = EventPriority.HIGHEST)
@@ -163,25 +153,24 @@ public class AutoArmor implements Listener {
         if (!(event.getWhoClicked() instanceof Player)) return;
 
         Player player = (Player) event.getWhoClicked();
+        if (player != null && CheckPolicy.exempt(player, "AutoArmor")) return;
         UUID uuid = player.getUniqueId();
 
         if (activeDecoys.containsKey(uuid)) {
             DecoyData decoy = activeDecoys.get(uuid);
 
-            // FIX: Folosim getRawSlot() pentru a prinde click-ul exact trimis de pachetul hack-ului
             if (event.getRawSlot() == decoy.slot) {
-                event.setCancelled(true);
+                if (CheckPolicy.cancel("AutoArmor")) event.setCancelled(true);
                 long reactionTime = System.currentTimeMillis() - decoy.spawnTime;
 
                 sendFakeItem(player, decoy.slot, new ItemStack(Material.AIR));
                 activeDecoys.remove(uuid);
 
-                // FIX: Oprim alarmele false dacă un jucător legitim apucă să dea click din greșeală
                 if (reactionTime < INHUMAN_REACTION_MS) {
-                    flagPlayer.addFlag(player, "AutoArmor", "Equipped ghost decoy in inhuman time (" + reactionTime + "ms).");
+                    flagPlayer.addFlag(player, "AutoArmor", Lang.text("checks.AutoArmor.name-autoarmor"), Lang.text("checks.AutoArmor.details-equipped-ghost-decoy-in-inhuman-time-ms", "reaction-time", reactionTime));
                 }
 
-                Bukkit.getScheduler().runTask(dakotaAC.getInstance(), player::updateInventory);
+                Diagnostics.sync(player::updateInventory);
                 return;
             }
         }
@@ -197,10 +186,10 @@ public class AutoArmor implements Listener {
 
         if (isArmorEquip) {
             long currentTime = System.currentTimeMillis();
-            boolean isHacking = validateEquipTiming(player, uuid, currentTime, "GUI Click");
+            boolean isHacking = validateEquipTiming(player, uuid, currentTime, Lang.text("checks.AutoArmor.input-gui-click"));
 
             if (isHacking) {
-                event.setCancelled(true);
+                if (CheckPolicy.cancel("AutoArmor")) event.setCancelled(true);
             }
         }
     }
@@ -214,7 +203,7 @@ public class AutoArmor implements Listener {
 
         if (timeSinceLastEquip > 0 && timeSinceLastEquip < SEQUENTIAL_EQUIP_MS) {
             flagged = true;
-            reason = "Equipped multiple pieces instantly via " + type + " (" + timeSinceLastEquip + "ms)";
+            reason = Lang.text("checks.AutoArmor.details-equipped-multiple-pieces-instantly-via-ms", "type", type, "time-since-last-equip", timeSinceLastEquip);
         }
         lastEquipTime.put(uuid, currentTime);
 
@@ -222,7 +211,7 @@ public class AutoArmor implements Listener {
             long timeSincePickup = currentTime - lastPickup.get(uuid);
             if (timeSincePickup < PICKUP_EQUIP_MS) {
                 flagged = true;
-                reason = "Equipped instantly after pickup (" + timeSincePickup + "ms)";
+                reason = Lang.text("checks.AutoArmor.details-equipped-instantly-after-pickup-ms", "time-since-pickup", timeSincePickup);
             }
         }
 
@@ -230,15 +219,15 @@ public class AutoArmor implements Listener {
             long timeSinceBreak = currentTime - lastBreak.get(uuid);
             if (timeSinceBreak < BREAK_EQUIP_MS) {
                 flagged = true;
-                reason = "Equipped instantly after armor broke (" + timeSinceBreak + "ms)";
+                reason = Lang.text("checks.AutoArmor.details-equipped-instantly-after-armor-broke-ms", "time-since-break", timeSinceBreak);
             }
         }
 
         if (flagged) {
             final String finalReason = reason;
-            Bukkit.getScheduler().runTask(dakotaAC.getInstance(), () -> {
+            Diagnostics.sync(() -> {
                 if (player.isOnline()) {
-                    flagPlayer.addFlag(player, "AutoArmor", finalReason);
+                    flagPlayer.addFlag(player, "AutoArmor", Lang.text("checks.AutoArmor.name-autoarmor"), finalReason);
                 }
             });
             return true;
@@ -251,6 +240,7 @@ public class AutoArmor implements Listener {
     public void onPickup(EntityPickupItemEvent event) {
         if (!(event.getEntity() instanceof Player)) return;
         Player player = (Player) event.getEntity();
+        if (player != null && CheckPolicy.exempt(player, "AutoArmor")) return;
 
         if (isArmor(event.getItem().getItemStack())) {
             lastPickup.put(player.getUniqueId(), System.currentTimeMillis());

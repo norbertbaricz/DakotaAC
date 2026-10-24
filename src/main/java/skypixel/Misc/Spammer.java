@@ -1,10 +1,14 @@
 package skypixel.Misc;
 
+import skypixel.compat.Diagnostics;
+import skypixel.config.CheckPolicy;
+import skypixel.config.Lang;
+import skypixel.config.Option;
+
 import com.comphenix.protocol.PacketType;
 import com.comphenix.protocol.ProtocolLibrary;
-import com.comphenix.protocol.events.PacketAdapter;
+import skypixel.compat.CompatibleAdapter;
 import com.comphenix.protocol.events.PacketEvent;
-import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
@@ -15,21 +19,17 @@ import skypixel.dakotaAC;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
+/** Original detection formulas; annotated defaults below are loaded from Modules.Spammer. */
 public class Spammer implements Listener {
 
-    // ==========================================
-    // SETĂRI UȘOR DE REGLAT (EASY TO TUNE)
-    // ==========================================
-    // Timpul minim (în milisecunde) permis între două mesaje/comenzi ORICARE AR FI ELE.
-    private static final long MIN_DELAY_BETWEEN_MESSAGES = 700L;
+    @Option(value = "min-delay-between-messages", min = 1.0, max = 1.0E9)
+    private static volatile long MIN_DELAY_BETWEEN_MESSAGES = 700L;
 
-    // FIX: Timpul maxim (în milisecunde) în care NU ai voie să repeți EXACT același mesaj.
-    // (5000L = 5 secunde). După 5 secunde, poți scrie din nou același mesaj.
-    private static final long REPEAT_MESSAGE_COOLDOWN = 5000L;
+    @Option(value = "repeat-message-cooldown", min = 1.0, max = 1.0E9)
+    private static volatile long REPEAT_MESSAGE_COOLDOWN = 5000L;
 
-    // Numărul maxim de avertismente (spam-uri anulate) înainte să alertăm adminii
-    private static final int MAX_VIOLATIONS = 3;
-    // ==========================================
+    @Option(value = "max-violations", min = 1.0, max = 1.0E9)
+    private static volatile int MAX_VIOLATIONS = 3;
 
     private final ConcurrentHashMap<UUID, Long> lastMessageTime = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<UUID, String> lastMessageText = new ConcurrentHashMap<>();
@@ -37,7 +37,7 @@ public class Spammer implements Listener {
 
     public Spammer() {
         ProtocolLibrary.getProtocolManager().addPacketListener(
-                new PacketAdapter(dakotaAC.getPlugin(dakotaAC.class),
+                new CompatibleAdapter(dakotaAC.getPlugin(dakotaAC.class),
                         com.comphenix.protocol.events.ListenerPriority.HIGHEST,
                         PacketType.Play.Client.CHAT,
                         PacketType.Play.Client.CHAT_COMMAND) {
@@ -48,25 +48,26 @@ public class Spammer implements Listener {
                             if (!dakotaAC.isCheckActive("Spammer")) return;
 
                             Player player = event.getPlayer();
+                            if (player != null && CheckPolicy.exempt(player, "Spammer")) return;
                             if (player == null) return;
 
-                            String message = event.getPacket().getStrings().readSafely(0);
+                            String message = event.getPacket().getStrings().read(0);
 
                             if (message == null || message.trim().isEmpty()) return;
 
-                            String type = (event.getPacketType() == PacketType.Play.Client.CHAT_COMMAND || message.startsWith("/")) ? "Command" : "Chat";
+                            String type = (event.getPacketType() != PacketType.Play.Client.CHAT || message.startsWith("/")) ? "Command" : "Chat";
 
-                            if (type.equals("Command") && player.hasPermission("dakotaac.admin")) {
+                            if (type.equals("Command") && dakotaAC.isAdmin(player)) {
                                 return;
                             }
 
                             if (handleSpamCheck(player, message, type)) {
-                                event.setCancelled(true);
-                                player.sendMessage("§c§l[!] §cPlease slow down! Do not spam " + type.toLowerCase() + "s.");
+                                if (CheckPolicy.cancel("Spammer")) event.setCancelled(true);
+                                player.sendMessage(Lang.text("checks.Spammer.message-please-slow-down-do-not-spam-s", "to-lower-case", Lang.text("checks.Spammer.type-" + type.toLowerCase(java.util.Locale.ROOT))));
                             }
 
-                        } catch (Exception ex) {
-                            ex.printStackTrace();
+                        } catch (Exception | LinkageError ex) {
+                            Diagnostics.report("Spammer", ex);
                         }
                     }
                 }
@@ -87,19 +88,16 @@ public class Spammer implements Listener {
 
         long timeSinceLastMessage = now - lastTime;
 
-        // LOGICA 1: Viteza (Sub MIN_DELAY_BETWEEN_MESSAGES între oricare mesaje)
         if (timeSinceLastMessage < MIN_DELAY_BETWEEN_MESSAGES) {
             isSpam = true;
-            flagReason = "Sending " + type.toLowerCase() + "s too fast.";
-        }
-        // LOGICA 2 (FIX): Repetiția (Același mesaj în mai puțin de REPEAT_MESSAGE_COOLDOWN)
-        else if (currentText.equalsIgnoreCase(lastText) && timeSinceLastMessage < REPEAT_MESSAGE_COOLDOWN) {
-            isSpam = true;
-            flagReason = "Repeating the exact same " + type.toLowerCase() + " too quickly.";
+            flagReason = Lang.text("checks.Spammer.details-sending-s-too-fast", "to-lower-case", Lang.text("checks.Spammer.type-" + type.toLowerCase(java.util.Locale.ROOT)));
         }
 
-        // Actualizăm memoria cu noul mesaj și timpul curent doar dacă NU a fost spam,
-        // sau dacă a fost spam de tip Viteză. Nu vrem ca mesajul blocat să reseteze complet timpul pentru un om onest.
+        else if (currentText.equalsIgnoreCase(lastText) && timeSinceLastMessage < REPEAT_MESSAGE_COOLDOWN) {
+            isSpam = true;
+            flagReason = Lang.text("checks.Spammer.details-repeating-the-exact-same-too-quickly", "to-lower-case", Lang.text("checks.Spammer.type-" + type.toLowerCase(java.util.Locale.ROOT)));
+        }
+
         if (!isSpam) {
             lastMessageTime.put(uuid, now);
             lastMessageText.put(uuid, currentText);
@@ -111,9 +109,9 @@ public class Spammer implements Listener {
 
             if (vl >= MAX_VIOLATIONS) {
                 final String finalReason = flagReason;
-                Bukkit.getScheduler().runTask(dakotaAC.getPlugin(dakotaAC.class), () -> {
+                Diagnostics.sync(() -> {
                     if (player.isOnline()) {
-                        flagPlayer.addFlag(player, "Spammer", finalReason);
+                        flagPlayer.addFlag(player, "Spammer", Lang.text("checks.Spammer.name-spammer"), finalReason);
                     }
                 });
 

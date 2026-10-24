@@ -1,10 +1,15 @@
 package skypixel.Combat;
 
+import skypixel.compat.PacketAccess;
+import skypixel.compat.Diagnostics;
+import skypixel.config.CheckPolicy;
+import skypixel.config.Lang;
+import skypixel.config.Option;
+
 import com.comphenix.protocol.PacketType;
 import com.comphenix.protocol.ProtocolLibrary;
-import com.comphenix.protocol.events.PacketAdapter;
+import skypixel.compat.CompatibleAdapter;
 import com.comphenix.protocol.events.PacketEvent;
-import org.bukkit.Bukkit;
 import org.bukkit.GameMode;
 import org.bukkit.Location;
 import org.bukkit.Material;
@@ -22,24 +27,27 @@ import skypixel.dakotaAC;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
+/** Original detection formulas; annotated defaults below are loaded from Modules.Velocity. */
 public class Velocity implements Listener {
 
-    // ==========================================
-    // SETĂRI UȘOR DE REGLAT (EASY TO TUNE)
-    // ==========================================
-    // Cât la sută din mișcarea verticală trebuie să respecte? (Ex: 0.35 = 35%)
-    // Oprește modulele: Modify, Reduce, Grim/Hypixel bypasses.
-    private static final double MIN_VERTICAL_RATIO = 0.35;
+    @Option(value = "jump-reset-min-y", min = 0.0, max = 1.0E9)
+    private static volatile double JUMP_RESET_MIN_Y = 0.4;
+    @Option(value = "min-expected-horizontal", min = 0.0, max = 1.0E9)
+    private static volatile double MIN_EXPECTED_HORIZONTAL = 0.1;
+    @Option(value = "min-knockback-y", min = 0.0, max = 1.0E9)
+    private static volatile double MIN_KNOCKBACK_Y = 0.1;
+    @Option(value = "ceiling-check-height", min = 0.0, max = 1.0E9)
+    private static volatile double CEILING_CHECK_HEIGHT = 2.0;
 
-    // Cât la sută din mișcarea orizontală trebuie să respecte?
-    // Este mai mic pentru că mecanici legit precum W-Tap, Sprint Reset sau JumpReset reduc orizontala.
-    private static final double MIN_HORIZONTAL_RATIO = 0.15;
+    @Option(value = "min-vertical-ratio", min = 0.0, max = 1.0E9)
+    private static volatile double MIN_VERTICAL_RATIO = 0.35;
 
-    // Timpul maxim în care așteptăm ca jucătorul să reacționeze la lovitură (Ping maxim admis + Lag)
-    private static final long MAX_PING_DELAY_MS = 600;
-    // ==========================================
+    @Option(value = "min-horizontal-ratio", min = 0.0, max = 1.0E9)
+    private static volatile double MIN_HORIZONTAL_RATIO = 0.15;
 
-    // Creăm un obiect intern pentru a stoca toate datele necesare unei lovituri
+    @Option(value = "max-ping-delay-ms", min = 1.0, max = 1.0E9)
+    private static volatile long MAX_PING_DELAY_MS = 600;
+
     private static class ExpectedKnockback {
         Vector expectedVelocity;
         long timestamp;
@@ -55,7 +63,7 @@ public class Velocity implements Listener {
 
     public Velocity() {
         ProtocolLibrary.getProtocolManager().addPacketListener(
-                new PacketAdapter(dakotaAC.getPlugin(dakotaAC.class),
+                new CompatibleAdapter(dakotaAC.getPlugin(dakotaAC.class),
                         com.comphenix.protocol.events.ListenerPriority.NORMAL,
                         PacketType.Play.Client.POSITION,
                         PacketType.Play.Client.POSITION_LOOK) {
@@ -66,15 +74,16 @@ public class Velocity implements Listener {
                             if (!dakotaAC.isCheckActive("Velocity")) return;
 
                             Player player = event.getPlayer();
+                            if (player != null && CheckPolicy.exempt(player, "Velocity")) return;
                             if (player == null || !player.isOnline()) return;
                             UUID uuid = player.getUniqueId();
 
                             ExpectedKnockback kbData = expectedVelocityMap.get(uuid);
                             if (kbData == null) return;
 
-                            double toX = event.getPacket().getDoubles().readSafely(0);
-                            double toY = event.getPacket().getDoubles().readSafely(1);
-                            double toZ = event.getPacket().getDoubles().readSafely(2);
+                            double toX = PacketAccess.coordinate(event.getPacket(), 0);
+                            double toY = PacketAccess.coordinate(event.getPacket(), 1);
+                            double toZ = PacketAccess.coordinate(event.getPacket(), 2);
 
                             double[] fromPos = lastPosMap.get(uuid);
                             if (fromPos == null) {
@@ -88,77 +97,66 @@ public class Velocity implements Listener {
 
                             long timeSinceHit = System.currentTimeMillis() - kbData.timestamp;
 
-                            // LOGICA SUPREMĂ: Verificăm procentajul de mișcare
                             double expectedY = kbData.expectedVelocity.getY();
                             double expectedHorizontal = Math.hypot(kbData.expectedVelocity.getX(), kbData.expectedVelocity.getZ());
                             double actualHorizontal = Math.hypot(deltaX, deltaZ);
 
-                            // Jucătorul a trimis o mișcare în sus. Verificăm dacă e un fake (Modify/Reduce)
                             if (deltaY > 0.0) {
 
-                                // JumpReset Bypass fix: Dacă sare, deltaY va fi în jur de 0.42 (Vanilla Jump).
-                                // Îl iertăm dacă a sărit legitim, altfel verificăm procentul.
-                                boolean isJumpReset = deltaY >= 0.4;
+                                boolean isJumpReset = deltaY >= JUMP_RESET_MIN_Y;
 
                                 if (!isJumpReset && deltaY < (expectedY * MIN_VERTICAL_RATIO)) {
-                                    flagSync(player, "Velocity (Vertical Reduce)", "Took only " + String.format("%.1f", (deltaY/expectedY)*100) + "% vertical KB");
+                                    flagSync(player, Lang.text("checks.Velocity.name-velocity-vertical-reduce"), Lang.text("checks.Velocity.details-took-only-vertical-kb", "expected-y", String.format(java.util.Locale.ROOT, "%.1f", (deltaY/expectedY)*100)));
                                 }
 
-                                // Strafe / Reduce Bypass fix: Verificăm dacă măcar încearcă să fie împins orizontal
-                                else if (expectedHorizontal > 0.1 && actualHorizontal < (expectedHorizontal * MIN_HORIZONTAL_RATIO)) {
-                                    // Dacă nu a făcut JumpReset (care taie orizontala grav), și totuși nu se mișcă orizontal
+                                else if (expectedHorizontal > MIN_EXPECTED_HORIZONTAL && actualHorizontal < (expectedHorizontal * MIN_HORIZONTAL_RATIO)) {
+
                                     if (!isJumpReset) {
-                                        flagSync(player, "Velocity (Horizontal Reduce)", "Ignored horizontal KB");
+                                        flagSync(player, Lang.text("checks.Velocity.name-velocity-horizontal-reduce"), Lang.text("checks.Velocity.details-ignored-horizontal-kb"));
                                     }
                                 }
 
-                                // Odată ce a răspuns la knockback cu o viteză Y pozitivă care a trecut de verificări, îl curățăm
                                 expectedVelocityMap.remove(uuid);
 
                             } else {
-                                // Expirare timp: modul "Lag" din imagine amână pachetele, noi tăiem firul la MAX_PING_DELAY_MS
+
                                 if (timeSinceHit > MAX_PING_DELAY_MS) {
-                                    flagSync(player, "Velocity (Cancel/Lag)", "No reaction to KB after " + MAX_PING_DELAY_MS + "ms");
+                                    flagSync(player, Lang.text("checks.Velocity.name-velocity-cancel-lag"), Lang.text("checks.Velocity.details-no-reaction-to-kb-after-ms", "value", MAX_PING_DELAY_MS));
                                     expectedVelocityMap.remove(uuid);
                                 }
                             }
 
-                            // Actualizăm poziția
                             lastPosMap.put(uuid, new double[]{toX, toY, toZ});
 
-                        } catch (Exception ex) {
-                            ex.printStackTrace();
+                        } catch (Exception | LinkageError ex) {
+                            Diagnostics.report("Velocity", ex);
                         }
                     }
                 }
         );
     }
 
-    // Funcție separată pentru a declanșa flag-ul în siguranță pe thread-ul principal
     private void flagSync(Player player, String type, String details) {
-        Bukkit.getScheduler().runTask(dakotaAC.getPlugin(dakotaAC.class), () -> {
+        Diagnostics.sync(() -> {
             if (player.isOnline() && !player.isDead()) {
-                flagPlayer.addFlag(player, type, details);
+                flagPlayer.addFlag(player, "Velocity", type, details);
             }
         });
     }
-
-    // --- EVENIMENTE BUKKIT ---
 
     @EventHandler
     public void onPlayerVelocity(PlayerVelocityEvent event) {
         if (!dakotaAC.isCheckActive("Velocity")) return;
 
         Player player = event.getPlayer();
+        if (player != null && CheckPolicy.exempt(player, "Velocity")) return;
         if (player.getGameMode() == GameMode.CREATIVE || player.isDead()) return;
 
         Vector velocity = event.getVelocity();
 
-        // Verificăm doar dacă knockback-ul este suficient de mare pentru a merita calculat
-        if (velocity.getY() > 0.1) {
+        if (velocity.getY() > MIN_KNOCKBACK_Y) {
             if (!canTakeKnockback(player)) return;
 
-            // Salvăm tot vectorul, nu doar Y-ul, ca să putem prinde hack-urile orizontale (Strafe/Reduce)
             expectedVelocityMap.put(player.getUniqueId(), new ExpectedKnockback(velocity.clone(), System.currentTimeMillis()));
 
             Location loc = player.getLocation();
@@ -184,15 +182,13 @@ public class Velocity implements Listener {
         Location loc = player.getLocation();
         Material currentBlock = loc.getBlock().getType();
 
-        // Blocuri lichide sau care blochează knockback-ul Vanilla
         if (currentBlock.name().contains("WATER") || currentBlock.name().contains("LAVA") ||
                 currentBlock.name().contains("COBWEB") || currentBlock.name().contains("VINE") ||
                 currentBlock.name().contains("HONEY")) {
             return false;
         }
 
-        // Verificăm tavanul (hitbox-ul jucătorului este 1.8 blocuri înălțime)
-        Block blockAbove = loc.clone().add(0, 2.0, 0).getBlock();
+        Block blockAbove = loc.clone().add(0, CEILING_CHECK_HEIGHT, 0).getBlock();
         if (blockAbove.getType().isSolid()) {
             return false;
         }

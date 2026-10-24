@@ -1,10 +1,15 @@
 package skypixel.Movement;
 
+import skypixel.compat.PacketAccess;
+import skypixel.compat.Diagnostics;
+import skypixel.config.CheckPolicy;
+import skypixel.config.Lang;
+import skypixel.config.Option;
+
 import com.comphenix.protocol.PacketType;
 import com.comphenix.protocol.ProtocolLibrary;
-import com.comphenix.protocol.events.PacketAdapter;
+import skypixel.compat.CompatibleAdapter;
 import com.comphenix.protocol.events.PacketEvent;
-import org.bukkit.Bukkit;
 import org.bukkit.GameMode;
 import org.bukkit.Location;
 import org.bukkit.Material;
@@ -23,26 +28,37 @@ import skypixel.dakotaAC;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
+/** Original detection formulas; annotated defaults below are loaded from Modules.NoFall. */
 public class NoFall implements Listener {
 
-    private static final double MIN_FALL_DIST_TO_CHECK = 2.5;
-    private static final double UPWARD_VELOCITY_RESET_NORMAL = 0.4;
-    private static final double UPWARD_VELOCITY_RESET_JUMP_BOOST = 0.2;
+    @Option(value = "fall-damage-free-distance", min = 0.0, max = 1.0E9)
+    private static volatile double FALL_DAMAGE_FREE_DISTANCE = 3.0;
+    @Option(value = "forced-damage-immunity-ms", min = 1.0, max = 1.0E9)
+    private static volatile long FORCED_DAMAGE_IMMUNITY_MS = 500L;
 
-    private static final long TELEPORT_IMMUNITY_MS = 1500L;
-    private static final long RESPAWN_IMMUNITY_MS = 2000L;
-    private static final long DEATH_IMMUNITY_MS = 3000L;
+    @Option(value = "min-fall-dist-to-check", min = 0.0, max = 1.0E9)
+    private static volatile double MIN_FALL_DIST_TO_CHECK = 2.5;
+    @Option(value = "upward-velocity-reset-normal", min = 0.0, max = 1.0E9)
+    private static volatile double UPWARD_VELOCITY_RESET_NORMAL = 0.4;
+    @Option(value = "upward-velocity-reset-jump-boost", min = 0.0, max = 1.0E9)
+    private static volatile double UPWARD_VELOCITY_RESET_JUMP_BOOST = 0.2;
+
+    @Option(value = "teleport-immunity-ms", min = 1.0, max = 1.0E9)
+    private static volatile long TELEPORT_IMMUNITY_MS = 1500L;
+    @Option(value = "respawn-immunity-ms", min = 1.0, max = 1.0E9)
+    private static volatile long RESPAWN_IMMUNITY_MS = 2000L;
+    @Option(value = "death-immunity-ms", min = 1.0, max = 1.0E9)
+    private static volatile long DEATH_IMMUNITY_MS = 3000L;
 
     private final ConcurrentHashMap<UUID, double[]> lastPosMap = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<UUID, Double> realFallDistanceMap = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<UUID, Long> teleportImmunity = new ConcurrentHashMap<>();
 
-    // Păstrăm buffer-ul exclusiv pentru desync-ul natural la impactul cu solul
     private final ConcurrentHashMap<UUID, Double> pendingNoGroundDamage = new ConcurrentHashMap<>();
 
     public NoFall() {
         ProtocolLibrary.getProtocolManager().addPacketListener(
-                new PacketAdapter(dakotaAC.getPlugin(dakotaAC.class),
+                new CompatibleAdapter(dakotaAC.getPlugin(dakotaAC.class),
                         com.comphenix.protocol.events.ListenerPriority.NORMAL,
                         PacketType.Play.Client.POSITION,
                         PacketType.Play.Client.POSITION_LOOK) {
@@ -53,13 +69,14 @@ public class NoFall implements Listener {
                             if (!dakotaAC.isCheckActive("NoFall")) return;
 
                             Player player = event.getPlayer();
+                            if (player != null && CheckPolicy.exempt(player, "NoFall")) return;
                             if (player == null || !player.isOnline()) return;
                             UUID uuid = player.getUniqueId();
 
-                            double toX = event.getPacket().getDoubles().readSafely(0);
-                            double toY = event.getPacket().getDoubles().readSafely(1);
-                            double toZ = event.getPacket().getDoubles().readSafely(2);
-                            boolean clientOnGround = event.getPacket().getBooleans().readSafely(0);
+                            double toX = PacketAccess.coordinate(event.getPacket(), 0);
+                            double toY = PacketAccess.coordinate(event.getPacket(), 1);
+                            double toZ = PacketAccess.coordinate(event.getPacket(), 2);
+                            boolean clientOnGround = PacketAccess.onGround(event.getPacket());
 
                             double[] fromPos = lastPosMap.get(uuid);
 
@@ -78,7 +95,7 @@ public class NoFall implements Listener {
                             double deltaY = toY - fromPos[1];
                             lastPosMap.put(uuid, new double[]{toX, toY, toZ});
 
-                            Bukkit.getScheduler().runTask(dakotaAC.getPlugin(dakotaAC.class), () -> {
+                            Diagnostics.sync(() -> {
                                 if (!player.isOnline() || player.isDead()) return;
 
                                 if (player.getGameMode() == GameMode.CREATIVE || player.getGameMode() == GameMode.SPECTATOR ||
@@ -116,35 +133,34 @@ public class NoFall implements Listener {
                                     }
                                 }
 
-                                // === 5. LOGICA SUPREMĂ DE DETECȚIE ===
                                 if (!isPhysicallyOnGround) {
-                                    // SUNTEM ÎN AER
+
                                     if (realFallDist > MIN_FALL_DIST_TO_CHECK) {
                                         if (clientOnGround) {
-                                            // FLAG INSTANT: Clientul Vanilla nu trimite niciodată onGround=true la >1.5 blocuri altitudine!
-                                            flagPlayer.addFlag(player, "NoFall (Spoof)", "Spoofed onGround mid-air (RealFall: " + String.format("%.2f", realFallDist) + ")");
-                                            player.setFallDistance((float) realFallDist);
+
+                                            flagPlayer.addFlag(player, "NoFall", Lang.text("checks.NoFall.name-nofall-spoof"), Lang.text("checks.NoFall.details-spoofed-onground-mid-air-realfall", "real-fall-dist", String.format(java.util.Locale.ROOT, "%.2f", realFallDist)));
+                                            if (CheckPolicy.enforce("NoFall")) player.setFallDistance((float) realFallDist);
                                         }
                                     }
                                     pendingNoGroundDamage.remove(uuid);
                                 } else {
-                                    // AM ATERIZAT PE PĂMÂNT (server-side)
-                                    if (realFallDist >= 3.0) {
+
+                                    if (realFallDist >= FALL_DAMAGE_FREE_DISTANCE) {
                                         if (!clientOnGround) {
-                                            // BUFFER 1-TICK: Așteptăm un tick pentru a compensa lag-ul natural la impact
+
                                             Double pending = pendingNoGroundDamage.remove(uuid);
                                             if (pending != null) {
-                                                flagPlayer.addFlag(player, "NoFall (NoGround)", "Landed but denied onGround (RealFall: " + String.format("%.2f", pending) + ")");
+                                                flagPlayer.addFlag(player, "NoFall", Lang.text("checks.NoFall.name-nofall-noground"), Lang.text("checks.NoFall.details-landed-but-denied-onground-realfall", "pending", String.format(java.util.Locale.ROOT, "%.2f", pending)));
                                                 forceFallDamage(player, pending);
                                             } else {
-                                                // Înghețăm resetarea distanței! Salvăm și așteptăm tick-ul următor.
+
                                                 pendingNoGroundDamage.put(uuid, realFallDist);
                                                 realFallDistanceMap.put(uuid, realFallDist);
                                                 return;
                                             }
                                         }
                                     }
-                                    // Dacă e curat sau a fost deja pedepsit, resetăm
+
                                     realFallDist = 0.0;
                                     pendingNoGroundDamage.remove(uuid);
                                 }
@@ -152,8 +168,8 @@ public class NoFall implements Listener {
                                 realFallDistanceMap.put(uuid, realFallDist);
                             });
 
-                        } catch (Exception ex) {
-                            ex.printStackTrace();
+                        } catch (Exception | LinkageError ex) {
+                            Diagnostics.report("NoFall", ex);
                         }
                     }
                 }
@@ -161,10 +177,10 @@ public class NoFall implements Listener {
     }
 
     private void forceFallDamage(Player player, double realFallDist) {
-        double damage = realFallDist - 3.0;
+        double damage = realFallDist - FALL_DAMAGE_FREE_DISTANCE;
         if (damage > 0) {
-            teleportImmunity.put(player.getUniqueId(), System.currentTimeMillis() + 500L);
-            player.damage(damage);
+            teleportImmunity.put(player.getUniqueId(), System.currentTimeMillis() + FORCED_DAMAGE_IMMUNITY_MS);
+            if (CheckPolicy.enforce("NoFall")) player.damage(damage);
         }
     }
 
@@ -228,12 +244,10 @@ public class NoFall implements Listener {
 
                     String name = type.name();
 
-                    // Gardurile și Zidurile au hitbox nativ înalt, le validăm pe toată adâncimea (Y-1.5)
                     if (name.contains("FENCE") || name.contains("WALL")) {
                         return true;
                     }
 
-                    // Blocurile normale sunt valide doar dacă sunt chiar sub picioare (Y-0.6)
                     if (by >= feetThreshold) {
                         if (type.isSolid() || name.contains("SNOW") || name.contains("CARPET") || name.contains("LILY")) {
                             return true;

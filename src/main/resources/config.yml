@@ -1,138 +1,969 @@
-# ==========================================================
-#
-#  ██████╗  █████╗ ██╗  ██╗██████╗ ████████╗ █████╗  █████╗  ██████╗
-#  ██╔══██╗██╔══██╗██║ ██╔╝██╔══██╗╚══██╔══╝██╔══██╗██╔══██╗██╔════╝
-#  ██║  ██║███████║█████╔╝ ██║  ██║   ██║   ███████║███████║██║
-#  ██║  ██║██╔══██║██╔═██╗ ██║  ██║   ██║   ██╔══██║██╔══██║██║
-#  ██████╔╝██║  ██║██║  ██╗██████╔╝   ██║   ██║  ██║██║  ██║╚██████╗
-#  ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚═════╝    ╚═╝   ╚═╝  ╚═╝╚═╝  ╚═╝ ╚═════╝
-#
-#                    Advanced Anti-Cheat System
-#                      Author: MaxUltimat3
-#
-# ==========================================================
+# DakotaAC configuration (English)
+# Existing Settings.* and Modules.<Check>.enabled keys are preserved.
+# All bundled thresholds retain the original project defaults.
+# Time values explicitly end in -ms or -ticks where the original setting has a unit.
+# /dac reload applies config.yml, lang.yml, thresholds, listeners, and repeating tasks.
+# Missing keys are added automatically; existing custom values are retained.
+# Module controls:
+#   cancel-events: cancel offending packets/Bukkit events.
+#   setbacks: teleport suspicious movement back to a safe position.
+#   enforce-actions: apply extra actions such as fall damage or resetting sprint.
+#   flag-enabled: record and announce detections.
+#   flag-weight: violation points per detection (1 preserves the original behavior).
+#   punish: allow this check's detections to trigger global kick/ban thresholds.
+#   bypass-permission: empty disables bypass; otherwise exempts that permission.
+# Messages and flag display names belong in lang.yml.
 
+# Global alert and punishment switches. Flag totals survive reconnects and /dac reload, until restart.
 Settings:
-  # Enable or disable in-game violation alerts for staff members.
-  # Players with the 'dakotaac.alerts' permission will receive these.
   Notifications: true
-
-  # Should the system automatically kick a player if they reach the max kick flags?
   Auto-Kick: true
-
-  # Should the system automatically ban a player if they reach the max ban flags?
   Auto-Ban: true
-
-  # How many violations (flags) a player must accumulate to trigger an automatic kick.
   Max-Kick-Flags: 800
-
-  # How many violations (flags) a player must accumulate to trigger an automatic ban.
   Max-Ban-Flags: 2000
 
-# ==========================================================
-# MODULES CONFIGURATION
-# Set 'enabled: true' to turn a check on, or 'false' to turn it off.
-# ==========================================================
-Modules:
+# Visible, rate-limited diagnostics. Unknown layouts are reported instead of silently ignored.
+Compatibility:
+  Error-Log-Interval-Ms: 30000
+  Print-Stack-Traces: false
 
-  # --- Combat Checks ---
+# Administrative access. Alert permission is configured under Alerts.notify-permission.
+Permissions:
+  admin: dakotaac.admin
+
+# Staff and console alerts share a per-player cooldown; violation totals do not.
+Alerts:
+  notify-permission: dakotaac.notification
+  alert-cooldown-ms: 3000
+  console: true
+
+# Console ban command supports {player}, {hack}, and {details}. Set it empty to skip command execution.
+Punishments:
+  ban-command: ban {player} [DakotaAC] {hack} - {details}
+  broadcast-kicks: true
+  broadcast-bans: true
+
+# Lifecycle alerts and optional sound names use Minecraft namespaced sound keys without minecraft:.
+Staff-Notifications:
+  enabled: true
+  sounds: true
+  error:
+    sound: block.note_block.bass
+    volume: 1.0
+    pitch: 0.5
+  success:
+    sound: entity.experience_orb.pickup
+    volume: 1.0
+    pitch: 1.0
+
+# Report counts remain in the first world persistent data container, as in the original project.
+Reports:
+  reports-needed-for-antibot: 3
+  report-cooldown-ms: 60000
+  players-per-book-page: 3
+  max-book-pages: 100
+
+# Per-check controls and thresholds. Geometry/protocol indexes are implementation details, not configurable packet layouts.
+Modules:
+  # AimBot
   AimBot:
     enabled: true
+    cancel-events: true
+    setbacks: true
+    enforce-actions: true
+    flag-enabled: true
+    flag-weight: 1
+    punish: true
+    bypass-permission: ''
+    max-valid-pitch: 90.0
+    flick-threshold: 20.0
+    snap-tolerance: 0.5
+    snap-max-violations: 2
+    noise-max-violations: 4
+
+  # AutoArmor
   AutoArmor:
     enabled: true
+    cancel-events: true
+    setbacks: true
+    enforce-actions: true
+    flag-enabled: true
+    flag-weight: 1
+    punish: true
+    bypass-permission: ''
+    initial-delay-ticks: 100
+    decoy-interval-ticks: 80
+    decoy-duration-ticks: 10
+    inhuman-reaction-ms: 400
+    sequential-equip-ms: 60
+    pickup-equip-ms: 150
+    break-equip-ms: 150
+
+  # AutoClicker
   AutoClicker:
     enabled: true
+    cancel-events: true
+    setbacks: true
+    enforce-actions: true
+    flag-enabled: true
+    flag-weight: 1
+    punish: true
+    bypass-permission: ''
+    buffer-decay-delay-ms: 3000
+    max-allowed-cps: 25
+    time-window-ms: 1000
+    max-violations: 3
+
+  # Criticals
   Criticals:
     enabled: true
+    cancel-events: true
+    setbacks: true
+    enforce-actions: true
+    flag-enabled: true
+    flag-weight: 1
+    punish: true
+    bypass-permission: ''
+    zero-vertical-tolerance: 0.0001
+    min-vanilla-jump: 0.41
+    micro-jump-max-ticks: 2
+    min-jump-cycle-ms: 50
+
+  # Hitbox
   Hitbox:
     enabled: true
+    cancel-events: true
+    setbacks: true
+    enforce-actions: true
+    flag-enabled: true
+    flag-weight: 1
+    punish: true
+    bypass-permission: ''
+    extra-hitbox-tolerance: 0.35
+    max-violations: 3
+
+  # KillAura
   KillAura:
     enabled: true
+    cancel-events: true
+    setbacks: true
+    enforce-actions: true
+    flag-enabled: true
+    flag-weight: 1
+    punish: true
+    bypass-permission: ''
+    min-dot-product: 0.6
+    min-switch-delay-ms: 100
+    max-angle-vl: 3
+    max-wall-vl: 3
+
+  # Reach
   Reach:
     enabled: true
+    cancel-events: true
+    setbacks: true
+    enforce-actions: true
+    flag-enabled: true
+    flag-weight: 1
+    punish: true
+    bypass-permission: ''
+    max-vanilla-reach: 3.0
+    lag-tolerance: 0.5
+    max-violations: 3
+
+  # Velocity
   Velocity:
     enabled: true
+    cancel-events: true
+    setbacks: true
+    enforce-actions: true
+    flag-enabled: true
+    flag-weight: 1
+    punish: true
+    bypass-permission: ''
+    jump-reset-min-y: 0.4
+    min-expected-horizontal: 0.1
+    min-knockback-y: 0.1
+    ceiling-check-height: 2.0
+    min-vertical-ratio: 0.35
+    min-horizontal-ratio: 0.15
+    max-ping-delay-ms: 600
 
-  # --- Exploit Checks ---
+  # GhostHand
   GhostHand:
     enabled: true
+    cancel-events: true
+    setbacks: true
+    enforce-actions: true
+    flag-enabled: true
+    flag-weight: 1
+    punish: true
+    bypass-permission: ''
+    visible-edge-offset: 0.45
+    ray-end-margin: 0.1
+    max-block-reach: 6.5
+    min-raytrace-distance: 1.5
+    max-violations: 3
+
+  # GodMode
   GodMode:
     enabled: true
+    cancel-events: true
+    setbacks: true
+    enforce-actions: true
+    flag-enabled: true
+    flag-weight: 1
+    punish: true
+    bypass-permission: ''
+    max-ghost-movement: 0.05
+    max-sleep-movement: 0.01
+    death-grace-period-ms: 1500
+    sleep-grace-period-ms: 1000
+
+  # Phase
   Phase:
     enabled: true
+    cancel-events: true
+    setbacks: true
+    enforce-actions: true
+    flag-enabled: true
+    flag-weight: 1
+    punish: true
+    bypass-permission: ''
+    max-movement-distance-squared: 64.0
+    hitbox-horizontal-inset: 0.05
+    hitbox-vertical-inset: 0.1
+    grace-period-ms: 2500
+    max-world-coordinate: 30000000.0
+
+  # PingSpoof
   PingSpoof:
     enabled: true
+    cancel-events: true
+    setbacks: true
+    enforce-actions: true
+    flag-enabled: true
+    flag-weight: 1
+    punish: true
+    bypass-permission: ''
+    ping-sample-delay-ticks: 1
+    max-ping-fluctuation: 400
+    safe-fluctuation: 50
+    max-violations: 3
+
+  # Plugins
   Plugins:
     enabled: true
+    cancel-events: true
+    setbacks: true
+    enforce-actions: true
+    flag-enabled: true
+    flag-weight: 1
+    punish: true
+    bypass-permission: ''
+    blocked-commands:
+    - pl
+    - plugins
+    - '?'
+    - about
+    - version
+    - ver
+    block-namespaced-suggestions: true
+    block-root-suggestions: true
+
+  # ServerCrasher
   ServerCrasher:
     enabled: true
+    cancel-events: true
+    setbacks: true
+    enforce-actions: true
+    flag-enabled: true
+    flag-weight: 1
+    punish: true
+    bypass-permission: ''
+    packet-window-ms: 1000
+    kick-on-flood: true
+    hide-max-players: true
+    extra-visible-slots: 1
+    max-packets-per-second: 150
+
+  # Blink
   Blink:
     enabled: true
+    cancel-events: true
+    setbacks: true
+    enforce-actions: true
+    flag-enabled: true
+    flag-weight: 1
+    punish: true
+    bypass-permission: ''
+    max-allowed-distance: 10.0
+    immunity-time-ms: 2000
+    max-world-coordinate: 30000000.0
+
+  # Regen
   Regen:
     enabled: true
+    cancel-events: true
+    setbacks: true
+    enforce-actions: true
+    flag-enabled: true
+    flag-weight: 1
+    punish: true
+    bypass-permission: ''
+    packet-window-ms: 1000
+    max-packets-per-second: 40
+    min-satiated-heal-time-ms: 400
 
-  # --- Fun & Misc Checks ---
+  # Derp
   Derp:
     enabled: true
+    cancel-events: true
+    setbacks: true
+    enforce-actions: true
+    flag-enabled: true
+    flag-weight: 1
+    punish: true
+    bypass-permission: ''
+    max-pitch: 90.1
+    max-yaw-swipe: 150.0
+    combined-yaw-swipe: 100.0
+    combined-pitch-swipe: 40.0
+    max-violations: 3
+
+  # AntiBot
   AntiBot:
     enabled: true
+    cancel-events: true
+    setbacks: true
+    enforce-actions: true
+    flag-enabled: true
+    flag-weight: 1
+    punish: true
+    bypass-permission: ''
+    level-one-hits-to-advance: 5
+    level-one-timeout-ms: 2000
+    level-one-radius: 1.4
+    level-one-rotation-speed: 0.3
+    level-one-y-offset: 0.2
+    level-two-hits-to-flag: 4
+    level-two-timeout-ms: 60000
+    level-two-distance: 3.6
+    level-two-y-offset: 0.0
+    fake-names:
+    - SolarFlare
+    - LunarEcho
+    - CrimsonBolt
+    - AzureBlade
+    - EmberHeart
+    - VoidWalker
+    - IronTide
+    - SerpentFang
+    - StormBreaker
+    - FrostByte
+    - ShadowClaw
+    - RogueWave
+    - BlazeRunner
+    - NightShade
+    - QuantumLeap
+    - Vortexia
+    - GraveStone
+    - PhoenixAsh
+    - CyberPunk
+    - OmegaZero
+    - ZenithPeak
+    - MysticGaze
+    - ArcaneSoul
+    - HeliosPrime
+    - NemesisX
+    - Joltara
+    - Raptor_Z
+    - EchoSphere
+    - TitanSlayer
+    - GigaDrill
+    - WraithKing
+    - Polaris_B
+    - AxionRay
+    - CipherCode
+    - Dreadnought
+    - FusionCore
+    - HavocReign
+    - Inferno_IX
+    - JaguarPaw
+    - KiloByte
+    - LaserFish
+    - MagmaFlow
+    - NeutronStar
+    - OrionBelt
+    - PulsarBeam
+    - QuasarFlow
+    - RazorEdge
+    - SonicBoom
+    - TerraFirm
+    - UltraViolet
+    - ViperStrike
+    - WarpDrive
+    - XenoMorph
+    - YottaFlux
+    - ZephyrWind
+    - AlphaWolf
+    - BravoSix
+    - Charlie_One
+    - DeltaForce
+    - EchoSeven
+    bot-boots:
+    - DIAMOND_BOOTS
+    - IRON_BOOTS
+    - CHAINMAIL_BOOTS
+    - LEATHER_BOOTS
+    bot-leggings:
+    - DIAMOND_LEGGINGS
+    - IRON_LEGGINGS
+    - CHAINMAIL_LEGGINGS
+    - LEATHER_LEGGINGS
+    bot-chestplates:
+    - DIAMOND_CHESTPLATE
+    - IRON_CHESTPLATE
+    - CHAINMAIL_CHESTPLATE
+    - LEATHER_CHESTPLATE
+    bot-helmets:
+    - DIAMOND_HELMET
+    - IRON_HELMET
+    - CHAINMAIL_HELMET
+    - LEATHER_HELMET
+    bot-swords:
+    - DIAMOND_SWORD
+    - IRON_SWORD
+    - NETHERITE_SWORD
+    - STONE_SWORD
+
+  # Spammer
   Spammer:
     enabled: true
+    cancel-events: true
+    setbacks: true
+    enforce-actions: true
+    flag-enabled: true
+    flag-weight: 1
+    punish: true
+    bypass-permission: ''
+    min-delay-between-messages: 700
+    repeat-message-cooldown: 5000
+    max-violations: 3
 
-  # --- Movement Checks ---
+  # Fly
   Fly:
     enabled: true
+    cancel-events: true
+    setbacks: true
+    enforce-actions: true
+    flag-enabled: true
+    flag-weight: 1
+    punish: true
+    bypass-permission: ''
+    hover-y-tolerance: 0.001
+    teleport-immunity-ms: 1000
+    max-hover-ticks: 3
+    max-ascension-ticks: 12
+    bounce-immunity-ms: 2500
+
+  # HighJump
   HighJump:
     enabled: true
+    cancel-events: true
+    setbacks: true
+    enforce-actions: true
+    flag-enabled: true
+    flag-weight: 1
+    punish: true
+    bypass-permission: ''
+    damage-immunity-ticks: 10
+    bounce-immunity-ms: 2000
+    death-immunity-ms: 3000
+    respawn-immunity-ms: 1500
+    base-jump-velocity: 0.425
+    jump-boost-multiplier: 0.15
+    complex-block-buffer: 0.6
+    grace-period-ms: 1000
+
+  # InventoryMove
   InventoryMove:
     enabled: true
+    cancel-events: true
+    setbacks: true
+    enforce-actions: true
+    flag-enabled: true
+    flag-weight: 1
+    punish: true
+    bypass-permission: ''
+    damage-immunity-ticks: 10
+    velocity-exemption-squared: 0.05
+    max-gui-speed-xz: 0.15
+    max-gui-speed-y: 0.1
+    max-violations: 3
+
+  # Jesus
   Jesus:
     enabled: true
+    cancel-events: true
+    setbacks: true
+    enforce-actions: true
+    flag-enabled: true
+    flag-weight: 1
+    punish: true
+    bypass-permission: ''
+    max-violations: 5
+    max-bounce-y: 0.1
+
+  # NoFall
   NoFall:
     enabled: true
+    cancel-events: true
+    setbacks: true
+    enforce-actions: true
+    flag-enabled: true
+    flag-weight: 1
+    punish: true
+    bypass-permission: ''
+    fall-damage-free-distance: 3.0
+    forced-damage-immunity-ms: 500
+    min-fall-dist-to-check: 2.5
+    upward-velocity-reset-normal: 0.4
+    upward-velocity-reset-jump-boost: 0.2
+    teleport-immunity-ms: 1500
+    respawn-immunity-ms: 2000
+    death-immunity-ms: 3000
+
+  # NoSlowDown
   NoSlowDown:
     enabled: true
+    cancel-events: true
+    setbacks: true
+    enforce-actions: true
+    flag-enabled: true
+    flag-weight: 1
+    punish: true
+    bypass-permission: ''
+    damage-immunity-ticks: 10
+    velocity-exemption: 0.05
+    speed-potion-allowance: 0.05
+    item-spam-tolerance-ticks: 8
+    max-item-use-speed: 0.16
+    max-web-speed: 0.15
+
+  # Sneak
   Sneak:
     enabled: true
+    cancel-events: true
+    setbacks: true
+    enforce-actions: true
+    flag-enabled: true
+    flag-weight: 1
+    punish: true
+    bypass-permission: ''
+    min-horizontal-movement: 0.01
+    damage-immunity-ticks: 10
+    velocity-exemption-squared: 0.05
+    max-sneak-speed-base: 0.145
+    speed-potion-multiplier: 0.045
+    swift-sneak-multiplier: 0.035
+    max-violations: 3
+
+  # Speed
   Speed:
     enabled: true
+    cancel-events: true
+    setbacks: true
+    enforce-actions: true
+    flag-enabled: true
+    flag-weight: 1
+    punish: true
+    bypass-permission: ''
+    max-world-coordinate: 30000000.0
+    max-tracked-movement: 10.0
+    damage-immunity-ticks: 10
+    velocity-exemption: 0.05
+    speed-potion-allowance: 0.06
+    instant-speed-multiplier: 2.5
+    post-flag-buffer: 0.5
+    teleport-immunity-ms: 1000
+    base-speed-limit: 0.36
+    max-buffer: 1.5
+    buffer-decay: 0.05
+    ice-multiplier: 1.8
+    slab-multiplier: 1.3
+    headhitter-multiplier: 1.5
+
+  # Sprint
   Sprint:
     enabled: true
+    cancel-events: true
+    setbacks: true
+    enforce-actions: true
+    flag-enabled: true
+    flag-weight: 1
+    punish: true
+    bypass-permission: ''
+    min-horizontal-movement: 0.01
+    max-allowed-angle: 85.0
+    max-yaw-flick-tolerance: 25.0
+    max-violations: 4
+
+  # Step
   Step:
     enabled: true
+    cancel-events: true
+    setbacks: true
+    enforce-actions: true
+    flag-enabled: true
+    flag-weight: 1
+    punish: true
+    bypass-permission: ''
+    max-tracked-delta-y: 10.0
+    teleport-grace-ms: 1000
+    damage-immunity-ticks: 10
+    velocity-exemption-y: 0.43
+    bounce-immunity-ms: 2000
+    base-jump-y: 0.425
+    max-step-y: 0.6
+    jump-boost-multiplier: 0.15
+    max-world-coordinate: 30000000.0
+    max-violations: 2
 
-  # --- Player Checks ---
+  # AntiVoid
   AntiVoid:
     enabled: true
+    cancel-events: true
+    setbacks: true
+    enforce-actions: true
+    flag-enabled: true
+    flag-weight: 1
+    punish: true
+    bypass-permission: ''
+    void-threshold-depth: 5.0
+    max-void-upward-distance: 5.0
+    grace-period-ms: 2000
+    max-world-coordinate: 30000000.0
+
+  # ChestStealer
   ChestStealer:
     enabled: true
+    cancel-events: true
+    setbacks: true
+    enforce-actions: true
+    flag-enabled: true
+    flag-weight: 1
+    punish: true
+    bypass-permission: ''
+    min-reaction-time-ms: 120
+    max-clicks-per-second: 15
+    time-window-ms: 1000
+
+  # FastUse
   FastUse:
     enabled: true
+    cancel-events: true
+    setbacks: true
+    enforce-actions: true
+    flag-enabled: true
+    flag-weight: 1
+    punish: true
+    bypass-permission: ''
+    min-consume-time-ms: 1200
+    min-kelp-time-ms: 600
+    max-violations: 2
+
+  # InventoryCleaner
   InventoryCleaner:
     enabled: true
+    cancel-events: true
+    setbacks: true
+    enforce-actions: true
+    flag-enabled: true
+    flag-weight: 1
+    punish: true
+    bypass-permission: ''
+    time-window-ms: 1000
+    max-inventory-actions: 20
+    max-item-drops: 15
+
+  # Version
   Version:
     enabled: true
+    cancel-events: true
+    setbacks: true
+    enforce-actions: true
+    flag-enabled: true
+    flag-weight: 1
+    punish: true
+    bypass-permission: ''
+    join-sample-delay-ticks: 20
+    min-protocol-version: 754
+    allowed-clients:
+    - vanilla
+    - lunar
+    - feather
+    - badlion
+    - optifine
+    - labymod
+    - geyser
+    - salwyrr
+    - aries
+    mod-loaders:
+    - forge
+    - fabric
+    - quilt
+    - liteloader
+    - neoforge
+
+  # AntiVPN
   AntiVPN:
     enabled: true
+    cancel-events: true
+    setbacks: true
+    enforce-actions: true
+    flag-enabled: true
+    flag-weight: 1
+    punish: true
+    bypass-permission: dakotaac.bypass.vpn
+    connect-timeout-ms: 3000
+    read-timeout-ms: 3000
+    api-url: https://blackbox.ipinfo.app/lookup/
+    kick-on-detection: false
 
-  # --- Render Checks ---
+  # ESP
   ESP:
     enabled: true
+    cancel-events: true
+    setbacks: true
+    enforce-actions: true
+    flag-enabled: true
+    flag-weight: 1
+    punish: true
+    bypass-permission: ''
+    nearby-visibility-distance: 2.5
+    max-entity-range: 40.0
+    task-interval-ticks: 5
+
+  # Tracers
   Tracers:
     enabled: true
+    cancel-events: true
+    setbacks: true
+    enforce-actions: true
+    flag-enabled: true
+    flag-weight: 1
+    punish: true
+    bypass-permission: ''
+    initial-delay-ticks: 20
+    tab-remove-delay-ticks: 5
+    look-tolerance-degrees: 1.0
+    vertical-random-spread: 3
+    decoys-per-second: 20
+    batch-interval-ticks: 20
+    min-decoy-distance: 15.0
+    max-decoy-distance: 25.0
+    max-view-count-before-flag: 15
+    fake-names:
+    - SolarFlare
+    - LunarEcho
+    - CrimsonBolt
+    - AzureBlade
+    - EmberHeart
+    - VoidWalker
+    - IronTide
+    - SerpentFang
+    - StormBreaker
+    - FrostByte
+    - ShadowClaw
+    - RogueWave
+    - BlazeRunner
+    - NightShade
+    - QuantumLeap
+    - Vortexia
+    - GraveStone
+    - PhoenixAsh
+    - CyberPunk
+    - OmegaZero
+    - ZenithPeak
+    - MysticGaze
+    - ArcaneSoul
+    - HeliosPrime
+    - NemesisX
+    - Joltara
+    - Raptor_Z
+    - EchoSphere
+    - TitanSlayer
+    - GigaDrill
+    - WraithKing
+    - Polaris_B
+    - AxionRay
+    - CipherCode
+    - Dreadnought
+    - FusionCore
+    - HavocReign
+    - Inferno_IX
+    - JaguarPaw
+    - KiloByte
+    - LaserFish
+    - MagmaFlow
+    - NeutronStar
+    - OrionBelt
+    - PulsarBeam
+    - QuasarFlow
+    - RazorEdge
+    - SonicBoom
+    - TerraFirm
+    - UltraViolet
+    - ViperStrike
+    - WarpDrive
+    - XenoMorph
+    - YottaFlux
+    - ZephyrWind
+    - AlphaWolf
+    - BravoSix
+    - Charlie_One
+    - DeltaForce
+    - EchoSeven
+
+  # XRay
   XRay:
     enabled: true
+    cancel-events: true
+    setbacks: true
+    enforce-actions: true
+    flag-enabled: true
+    flag-weight: 1
+    punish: true
+    bypass-permission: ''
+    initial-delay-ticks: 100
+    task-interval-ticks: 200
+    max-plant-attempts: 20
+    min-ores-to-check: 30
+    min-stone-to-ore-ratio: 5.0
+    penalize-mining-in-dark: false
+    max-active-decoys-per-player: 15
+    decoys-planted-per-cycle: 5
+    scan-radius-horizontal: 6
+    scan-radius-vertical: 5
+    decoy-ores:
+    - COAL_ORE
+    - DEEPSLATE_COAL_ORE
+    - COPPER_ORE
+    - DEEPSLATE_COPPER_ORE
+    - IRON_ORE
+    - DEEPSLATE_IRON_ORE
+    - GOLD_ORE
+    - DEEPSLATE_GOLD_ORE
+    - LAPIS_ORE
+    - DEEPSLATE_LAPIS_ORE
+    - REDSTONE_ORE
+    - DEEPSLATE_REDSTONE_ORE
+    - EMERALD_ORE
+    - DEEPSLATE_EMERALD_ORE
+    - DIAMOND_ORE
+    - DEEPSLATE_DIAMOND_ORE
+    - ANCIENT_DEBRIS
+    fakeable-blocks:
+    - STONE
+    - DEEPSLATE
+    - TUFF
+    - NETHERRACK
 
-  # --- World Checks ---
+  # FastBreak
   FastBreak:
     enabled: true
+    cancel-events: true
+    setbacks: true
+    enforce-actions: true
+    flag-enabled: true
+    flag-weight: 1
+    punish: true
+    bypass-permission: ''
+    min-obsidian-time: 1500
+    min-heavy-time: 350
+    min-deepslate-time: 150
+    max-violations: 2
+
+  # FastPlace
   FastPlace:
     enabled: true
+    cancel-events: true
+    setbacks: true
+    enforce-actions: true
+    flag-enabled: true
+    flag-weight: 1
+    punish: true
+    bypass-permission: ''
+    initial-place-delay-ms: 500
+    min-place-delay-ms: 75
+    tcp-burst-threshold-ms: 15
+    max-violations: 4
+
+  # Fucker
   Fucker:
     enabled: true
+    cancel-events: true
+    setbacks: true
+    enforce-actions: true
+    flag-enabled: true
+    flag-weight: 1
+    punish: true
+    bypass-permission: ''
+    reach-center-tolerance: 0.5
+    nearby-exemption-distance: 1.2
+    ray-end-margin: 0.1
+    min-wall-ray-distance: 0.5
+    max-block-reach: 6.0
+    hitbox-forgiveness: 0.15
+    max-violations: 3
+
+  # Nuker
   Nuker:
     enabled: true
+    cancel-events: true
+    setbacks: true
+    enforce-actions: true
+    flag-enabled: true
+    flag-weight: 1
+    punish: true
+    bypass-permission: ''
+    time-window-ms: 1000
+    max-blocks-per-second: 25
+    burst-window-ms: 50
+    max-burst-blocks: 4
+
+  # Scaffold
   Scaffold:
     enabled: true
+    cancel-events: true
+    setbacks: true
+    enforce-actions: true
+    flag-enabled: true
+    flag-weight: 1
+    punish: true
+    bypass-permission: ''
+    initial-place-delay-ms: 500
+    sprint-bridge-distance: 1.0
+    max-dot-product: 0.35
+    min-scaffold-pitch: 75.0
+    min-tower-delay-ms: 75
+    tcp-burst-threshold-ms: 15
+    max-tower-violations: 3
+
+  # Timer
   Timer:
     enabled: true
+    cancel-events: true
+    setbacks: true
+    enforce-actions: true
+    flag-enabled: true
+    flag-weight: 1
+    punish: true
+    bypass-permission: ''
+    reset-after-idle-ms: 2000
+    packet-cost-ms: 50
+    max-lag-buffer: 150
+    flag-threshold: -250
+    max-violations: 3
+

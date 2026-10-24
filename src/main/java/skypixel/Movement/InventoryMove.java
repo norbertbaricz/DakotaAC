@@ -1,10 +1,15 @@
 package skypixel.Movement;
 
+import skypixel.compat.PacketAccess;
+import skypixel.compat.Diagnostics;
+import skypixel.config.CheckPolicy;
+import skypixel.config.Lang;
+import skypixel.config.Option;
+
 import com.comphenix.protocol.PacketType;
 import com.comphenix.protocol.ProtocolLibrary;
-import com.comphenix.protocol.events.PacketAdapter;
+import skypixel.compat.CompatibleAdapter;
 import com.comphenix.protocol.events.PacketEvent;
-import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
@@ -19,15 +24,20 @@ import skypixel.dakotaAC;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
+/** Original detection formulas; annotated defaults below are loaded from Modules.InventoryMove. */
 public class InventoryMove implements Listener {
 
-    // ==========================================
-    // SETĂRI UȘOR DE REGLAT (EASY TO TUNE)
-    // ==========================================
-    private static final double MAX_GUI_SPEED_XZ = 0.15;
-    private static final double MAX_GUI_SPEED_Y = 0.10;
-    private static final int MAX_VIOLATIONS = 3;
-    // ==========================================
+    @Option(value = "damage-immunity-ticks", min = 1.0, max = 1.0E9)
+    private static volatile int DAMAGE_IMMUNITY_TICKS = 10;
+    @Option(value = "velocity-exemption-squared", min = 0.0, max = 1.0E9)
+    private static volatile double VELOCITY_EXEMPTION_SQUARED = 0.05;
+
+    @Option(value = "max-gui-speed-xz", min = 0.0, max = 1.0E9)
+    private static volatile double MAX_GUI_SPEED_XZ = 0.15;
+    @Option(value = "max-gui-speed-y", min = 0.0, max = 1.0E9)
+    private static volatile double MAX_GUI_SPEED_Y = 0.10;
+    @Option(value = "max-violations", min = 1.0, max = 1.0E9)
+    private static volatile int MAX_VIOLATIONS = 3;
 
     private final ConcurrentHashMap<UUID, Boolean> openGUIs = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<UUID, Integer> violationBuffer = new ConcurrentHashMap<>();
@@ -37,7 +47,7 @@ public class InventoryMove implements Listener {
 
     public InventoryMove() {
         ProtocolLibrary.getProtocolManager().addPacketListener(
-                new PacketAdapter(dakotaAC.getPlugin(dakotaAC.class),
+                new CompatibleAdapter(dakotaAC.getPlugin(dakotaAC.class),
                         com.comphenix.protocol.events.ListenerPriority.NORMAL,
                         PacketType.Play.Client.POSITION,
                         PacketType.Play.Client.POSITION_LOOK,
@@ -49,34 +59,25 @@ public class InventoryMove implements Listener {
                             if (!dakotaAC.isCheckActive("InventoryMove")) return;
 
                             Player player = event.getPlayer();
+                            if (player != null && CheckPolicy.exempt(player, "InventoryMove")) return;
                             if (player == null) return;
                             UUID uuid = player.getUniqueId();
                             PacketType type = event.getPacketType();
 
-                            // ==========================================
-                            // LOGICA 1: SPRINT PARADOX
-                            // ==========================================
                             if (type == PacketType.Play.Client.WINDOW_CLICK) {
                                 boolean onGround = lastGroundMap.getOrDefault(uuid, true);
 
                                 if (player.isSprinting() && onGround) {
-                                    event.setCancelled(true);
-                                    Bukkit.getScheduler().runTask(dakotaAC.getPlugin(dakotaAC.class), () -> {
+                                    if (CheckPolicy.cancel("InventoryMove")) event.setCancelled(true);
+                                    Diagnostics.sync(() -> {
                                         if (player.isOnline()) {
-                                            flagPlayer.addFlag(player, "InventoryMove (Sprint)", "Sprinting while interacting with inventory.");
+                                            flagPlayer.addFlag(player, "InventoryMove", Lang.text("checks.InventoryMove.name-inventorymove-sprint"), Lang.text("checks.InventoryMove.details-sprinting-while-interacting-with-inventory"));
                                         }
                                     });
                                 }
                                 return;
                             }
 
-                            // ==========================================
-                            // LOGICA 2: MIȘCAREA CU GUI EXTERN DESCHIS
-                            // ==========================================
-
-                            // === FIX NOU: EXCEPȚII ASINCRONE ===
-                            // Dacă jucătorul are voie să zboare, folosește Elytra, înoată sau e într-o barcă,
-                            // îi ignorăm mișcarea direct de pe placa de rețea pentru a preveni "înghețarea" ecranului!
                             if (player.getAllowFlight() || player.isFlying() || player.isGliding() || player.isSwimming() || player.isInsideVehicle()) {
                                 updatePositionData(event, uuid);
                                 return;
@@ -87,9 +88,9 @@ public class InventoryMove implements Listener {
                                 return;
                             }
 
-                            double toX = event.getPacket().getDoubles().readSafely(0);
-                            double toY = event.getPacket().getDoubles().readSafely(1);
-                            double toZ = event.getPacket().getDoubles().readSafely(2);
+                            double toX = PacketAccess.coordinate(event.getPacket(), 0);
+                            double toY = PacketAccess.coordinate(event.getPacket(), 1);
+                            double toZ = PacketAccess.coordinate(event.getPacket(), 2);
 
                             double[] fromPos = lastPosMap.get(uuid);
 
@@ -117,19 +118,18 @@ public class InventoryMove implements Listener {
                                 violationBuffer.put(uuid, vl);
 
                                 if (vl > MAX_VIOLATIONS) {
-                                    // Anulăm pachetul asincron doar pentru jucătorii fără grad/zbor legitim
-                                    event.setCancelled(true);
 
-                                    Bukkit.getScheduler().runTask(dakotaAC.getPlugin(dakotaAC.class), () -> {
+                                    if (CheckPolicy.cancel("InventoryMove")) event.setCancelled(true);
+
+                                    Diagnostics.sync(() -> {
                                         if (!player.isOnline() || player.isDead()) return;
 
-                                        // Double-check pentru Knockback (Săgeți/Hit-uri luate în timp ce se uită în meniu)
-                                        if (player.getNoDamageTicks() > 10 || player.getVelocity().lengthSquared() > 0.05) {
+                                        if (player.getNoDamageTicks() > DAMAGE_IMMUNITY_TICKS || player.getVelocity().lengthSquared() > VELOCITY_EXEMPTION_SQUARED) {
                                             violationBuffer.put(uuid, 0);
                                             return;
                                         }
 
-                                        flagPlayer.addFlag(player, "InventoryMove", "Walking/Jumping with GUI open (dXZ: " + String.format("%.2f", deltaXZ) + ")");
+                                        flagPlayer.addFlag(player, "InventoryMove", Lang.text("checks.InventoryMove.name-inventorymove"), Lang.text("checks.InventoryMove.details-walking-jumping-with-gui-open-dxz", "delta-x-z", String.format(java.util.Locale.ROOT, "%.2f", deltaXZ)));
                                     });
                                 }
                             } else {
@@ -141,8 +141,8 @@ public class InventoryMove implements Listener {
                                 updatePositionData(event, uuid);
                             }
 
-                        } catch (Exception ex) {
-                            ex.printStackTrace();
+                        } catch (Exception | LinkageError ex) {
+                            Diagnostics.report("InventoryMove", ex);
                         }
                     }
                 }
@@ -150,10 +150,10 @@ public class InventoryMove implements Listener {
     }
 
     private void updatePositionData(PacketEvent event, UUID uuid) {
-        double x = event.getPacket().getDoubles().readSafely(0);
-        double y = event.getPacket().getDoubles().readSafely(1);
-        double z = event.getPacket().getDoubles().readSafely(2);
-        boolean onGround = event.getPacket().getBooleans().readSafely(0);
+        double x = PacketAccess.coordinate(event.getPacket(), 0);
+        double y = PacketAccess.coordinate(event.getPacket(), 1);
+        double z = PacketAccess.coordinate(event.getPacket(), 2);
+        boolean onGround = PacketAccess.onGround(event.getPacket());
 
         lastPosMap.put(uuid, new double[]{x, y, z});
         lastGroundMap.put(uuid, onGround);

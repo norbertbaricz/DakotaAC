@@ -1,64 +1,23 @@
 package skypixel.Commands;
 
-import org.bukkit.ChatColor;
 import org.bukkit.command.CommandSender;
+import skypixel.config.Lang;
 import skypixel.dakotaAC;
-
-import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
+import java.util.Locale;
 
 public class Check extends SubCommand {
-
-    @Override
-    public String getName() {
-        return "check";
+    @Override public String getName() { return "check"; }
+    @Override public void execute(CommandSender sender, String[] args) {
+        if (args.length < 2) { sender.sendMessage(Lang.text("commands.check-usage")); return; }
+        String module = dakotaAC.getChecks().keySet().stream().filter(key -> key.equalsIgnoreCase(args[1])).findFirst().orElse(null);
+        if (module == null) { sender.sendMessage(Lang.text("commands.check-unknown", "module", args[1])); return; }
+        dakotaAC.toggleCheck(module);
+        sender.sendMessage(Lang.text("commands.check-toggle", "module", module,
+                "state", Lang.text(dakotaAC.isCheckActive(module) ? "common.enabled" : "common.disabled")));
     }
-
-    @Override
-    public void execute(CommandSender sender, String[] args) {
-        if (args.length < 2) {
-            sender.sendMessage(PREFIX + ChatColor.RED + "Usage: /dakotaac check <ModuleName>");
-            return;
-        }
-
-        String module = getExactModuleName(args[1]);
-
-        if (module == null) {
-            sender.sendMessage(PREFIX + ChatColor.RED + "Module '" + args[1] + "' does not exist.");
-            return;
-        }
-
-        Map<String, Boolean> checks = dakotaAC.getChecks();
-        boolean currentState = checks.get(module);
-        checks.put(module, !currentState);
-
-        if (!currentState) {
-            sender.sendMessage(PREFIX + "Module " + ChatColor.YELLOW + module + ChatColor.GRAY + " is now " + ChatColor.GREEN + "ENABLED");
-        } else {
-            sender.sendMessage(PREFIX + "Module " + ChatColor.YELLOW + module + ChatColor.GRAY + " is now " + ChatColor.RED + "DISABLED");
-        }
-    }
-
-    @Override
-    public List<String> getTabCompletions(CommandSender sender, String[] args) {
-        List<String> completions = new ArrayList<>();
-        if (args.length == 2) {
-            for (String module : dakotaAC.getChecks().keySet()) {
-                if (module.toLowerCase().startsWith(args[1].toLowerCase())) {
-                    completions.add(module);
-                }
-            }
-        }
-        return completions;
-    }
-
-    private String getExactModuleName(String input) {
-        for (String key : dakotaAC.getChecks().keySet()) {
-            if (key.equalsIgnoreCase(input)) {
-                return key;
-            }
-        }
-        return null;
+    @Override public List<String> getTabCompletions(CommandSender sender, String[] args) {
+        if (args.length != 2) return List.of();
+        return dakotaAC.getChecks().keySet().stream().filter(key -> key.toLowerCase(Locale.ROOT).startsWith(args[1].toLowerCase(Locale.ROOT))).toList();
     }
 }

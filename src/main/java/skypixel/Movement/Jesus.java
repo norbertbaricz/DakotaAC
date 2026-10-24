@@ -1,10 +1,15 @@
 package skypixel.Movement;
 
+import skypixel.compat.PacketAccess;
+import skypixel.compat.Diagnostics;
+import skypixel.config.CheckPolicy;
+import skypixel.config.Lang;
+import skypixel.config.Option;
+
 import com.comphenix.protocol.PacketType;
 import com.comphenix.protocol.ProtocolLibrary;
-import com.comphenix.protocol.events.PacketAdapter;
+import skypixel.compat.CompatibleAdapter;
 import com.comphenix.protocol.events.PacketEvent;
-import org.bukkit.Bukkit;
 import org.bukkit.GameMode;
 import org.bukkit.Location;
 import org.bukkit.Material;
@@ -21,21 +26,20 @@ import skypixel.dakotaAC;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
+/** Original detection formulas; annotated defaults below are loaded from Modules.Jesus. */
 public class Jesus implements Listener {
 
-    // ==========================================
-    // SETĂRI UȘOR DE REGLAT (EASY TO TUNE)
-    // ==========================================
-    private static final int MAX_VIOLATIONS = 5;
-    private static final double MAX_BOUNCE_Y = 0.1;
-    // ==========================================
+    @Option(value = "max-violations", min = 1.0, max = 1.0E9)
+    private static volatile int MAX_VIOLATIONS = 5;
+    @Option(value = "max-bounce-y", min = 0.0, max = 1.0E9)
+    private static volatile double MAX_BOUNCE_Y = 0.1;
 
     private final ConcurrentHashMap<UUID, Integer> jesusBuffer = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<UUID, double[]> lastPosMap = new ConcurrentHashMap<>();
 
     public Jesus() {
         ProtocolLibrary.getProtocolManager().addPacketListener(
-                new PacketAdapter(dakotaAC.getPlugin(dakotaAC.class),
+                new CompatibleAdapter(dakotaAC.getPlugin(dakotaAC.class),
                         com.comphenix.protocol.events.ListenerPriority.NORMAL,
                         PacketType.Play.Client.POSITION,
                         PacketType.Play.Client.POSITION_LOOK) {
@@ -46,12 +50,13 @@ public class Jesus implements Listener {
                             if (!dakotaAC.isCheckActive("Jesus")) return;
 
                             Player player = event.getPlayer();
+                            if (player != null && CheckPolicy.exempt(player, "Jesus")) return;
                             if (player == null || player.getGameMode() == GameMode.SPECTATOR || player.getGameMode() == GameMode.CREATIVE) return;
                             UUID uuid = player.getUniqueId();
 
-                            double toX = event.getPacket().getDoubles().readSafely(0);
-                            double toY = event.getPacket().getDoubles().readSafely(1);
-                            double toZ = event.getPacket().getDoubles().readSafely(2);
+                            double toX = PacketAccess.coordinate(event.getPacket(), 0);
+                            double toY = PacketAccess.coordinate(event.getPacket(), 1);
+                            double toZ = PacketAccess.coordinate(event.getPacket(), 2);
 
                             double[] fromPos = lastPosMap.get(uuid);
 
@@ -78,7 +83,7 @@ public class Jesus implements Listener {
                             final double[] safeFromPos = {fromPos[0], fromPos[1], fromPos[2]};
                             lastPosMap.put(uuid, new double[]{toX, toY, toZ});
 
-                            Bukkit.getScheduler().runTask(dakotaAC.getPlugin(dakotaAC.class), () -> {
+                            Diagnostics.sync(() -> {
                                 if (!player.isOnline() || player.isDead()) return;
 
                                 if (player.getAllowFlight() || player.isInsideVehicle() || player.isGliding() || player.isRiptiding()) {
@@ -86,8 +91,6 @@ public class Jesus implements Listener {
                                     return;
                                 }
 
-                                // === FIX PIKEUN LAVA JEUNG KNOCKBACK SEUNEU ===
-                                // Lamun pamaén keur kabeuleum atawa narima ruksakna (damage), ulah dipariksa
                                 if (player.getFireTicks() > 0 || player.getNoDamageTicks() > 10) {
                                     jesusBuffer.remove(uuid);
                                     return;
@@ -124,17 +127,17 @@ public class Jesus implements Listener {
                                 jesusBuffer.put(uuid, vl);
 
                                 if (vl > MAX_VIOLATIONS) {
-                                    flagPlayer.addFlag(player, "Jesus", "Unnatural vertical stability in liquid (Y-Speed: " + String.format("%.3f", deltaY) + ")");
+                                    flagPlayer.addFlag(player, "Jesus", Lang.text("checks.Jesus.name-jesus"), Lang.text("checks.Jesus.details-unnatural-vertical-stability-in-liquid-y-speed", "delta-y", String.format(java.util.Locale.ROOT, "%.3f", deltaY)));
 
                                     Location pullDownLoc = new Location(player.getWorld(), safeFromPos[0], safeFromPos[1] - 0.5, safeFromPos[2], player.getLocation().getYaw(), player.getLocation().getPitch());
-                                    player.teleport(pullDownLoc, PlayerTeleportEvent.TeleportCause.PLUGIN);
+                                    if (CheckPolicy.setbacks("Jesus")) player.teleport(pullDownLoc, PlayerTeleportEvent.TeleportCause.PLUGIN);
 
                                     jesusBuffer.put(uuid, 2);
                                 }
                             });
 
-                        } catch (Exception ex) {
-                            ex.printStackTrace();
+                        } catch (Exception | LinkageError ex) {
+                            Diagnostics.report("Jesus", ex);
                         }
                     }
                 }

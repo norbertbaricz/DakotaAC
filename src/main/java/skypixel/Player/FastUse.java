@@ -1,11 +1,15 @@
 package skypixel.Player;
 
+import skypixel.compat.Diagnostics;
+import skypixel.config.CheckPolicy;
+import skypixel.config.Lang;
+import skypixel.config.Option;
+
 import com.comphenix.protocol.PacketType;
 import com.comphenix.protocol.ProtocolLibrary;
-import com.comphenix.protocol.events.PacketAdapter;
+import skypixel.compat.CompatibleAdapter;
 import com.comphenix.protocol.events.PacketEvent;
 import com.comphenix.protocol.wrappers.EnumWrappers;
-import org.bukkit.Bukkit;
 import org.bukkit.Material;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
@@ -19,34 +23,28 @@ import skypixel.dakotaAC;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
+/** Original detection formulas; annotated defaults below are loaded from Modules.FastUse. */
 public class FastUse implements Listener {
 
-    // ==========================================
-    // SETĂRI UȘOR DE REGLAT (EASY TO TUNE)
-    // ==========================================
-    // Timpul legal în Vanilla pentru a consuma alimente/poțiuni este de 1600ms (32 ticks).
-    // Permitem 1200ms pentru a absorbi latența (Ping) și packet-loss-ul.
-    private static final long MIN_CONSUME_TIME_MS = 1200L;
+    @Option(value = "min-consume-time-ms", min = 1.0, max = 1.0E9)
+    private static volatile long MIN_CONSUME_TIME_MS = 1200L;
 
-    // Algele uscate (Dried Kelp) se consumă dublu de repede (800ms / 16 ticks).
-    // Oferim o limită adaptată de 600ms.
-    private static final long MIN_KELP_TIME_MS = 600L;
+    @Option(value = "min-kelp-time-ms", min = 1.0, max = 1.0E9)
+    private static volatile long MIN_KELP_TIME_MS = 600L;
 
-    // Câte abateri iertăm înainte să dăm flag? (Absoarbe desincronizările izolate)
-    private static final int MAX_VIOLATIONS = 2;
-    // ==========================================
+    @Option(value = "max-violations", min = 1.0, max = 1.0E9)
+    private static volatile int MAX_VIOLATIONS = 2;
 
-    // Folosim ConcurrentHashMap pentru scriere/citire asincronă sigură
     private final ConcurrentHashMap<UUID, Long> consumeStartTimes = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<UUID, Integer> fastUseBuffer = new ConcurrentHashMap<>();
 
     public FastUse() {
         ProtocolLibrary.getProtocolManager().addPacketListener(
-                new PacketAdapter(dakotaAC.getPlugin(dakotaAC.class),
+                new CompatibleAdapter(dakotaAC.getPlugin(dakotaAC.class),
                         com.comphenix.protocol.events.ListenerPriority.NORMAL,
                         PacketType.Play.Client.USE_ITEM,
                         PacketType.Play.Client.USE_ITEM_ON,
-                        PacketType.Play.Client.BLOCK_DIG) { // Adăugat pentru a citi oprirea animației
+                        PacketType.Play.Client.BLOCK_DIG) { 
 
                     @Override
                     public void onPacketReceiving(PacketEvent event) {
@@ -54,89 +52,77 @@ public class FastUse implements Listener {
                             if (!dakotaAC.isCheckActive("FastUse")) return;
 
                             Player player = event.getPlayer();
+                            if (player != null && CheckPolicy.exempt(player, "FastUse")) return;
                             if (player == null) return;
                             UUID uuid = player.getUniqueId();
 
                             PacketType type = event.getPacketType();
 
-                            // FIX CRITIC: Dacă jucătorul ia degetul de pe click-dreapta, ștergem memoria!
-                            // Previne folosirea unui timp "vechi" pentru a abuza un InstaEat mai târziu.
                             if (type == PacketType.Play.Client.BLOCK_DIG) {
-                                EnumWrappers.PlayerDigType digType = event.getPacket().getPlayerDigTypes().readSafely(0);
+                                EnumWrappers.PlayerDigType digType = event.getPacket().getPlayerDigTypes().read(0);
                                 if (digType == EnumWrappers.PlayerDigType.RELEASE_USE_ITEM) {
                                     consumeStartTimes.remove(uuid);
                                 }
                                 return;
                             }
 
-                            // Pentru USE_ITEM și USE_ITEM_ON:
                             consumeStartTimes.put(uuid, System.currentTimeMillis());
 
-                        } catch (Exception ex) {
-                            ex.printStackTrace();
+                        } catch (Exception | LinkageError ex) {
+                            Diagnostics.report("FastUse", ex);
                         }
                     }
                 }
         );
     }
 
-    // ========================================================
-    // DELEGAREA CĂTRE MAIN THREAD: Când serverul finalizează consumul
-    // Folosim LOWEST ca să anulăm mâncatul înainte ca alte sisteme să-i dea viață.
-    // ========================================================
     @EventHandler(priority = EventPriority.LOWEST)
     public void onConsume(PlayerItemConsumeEvent event) {
         if (!dakotaAC.isCheckActive("FastUse")) return;
 
         Player player = event.getPlayer();
+        if (player != null && CheckPolicy.exempt(player, "FastUse")) return;
         UUID uuid = player.getUniqueId();
         Material consumedItem = event.getItem().getType();
 
         long now = System.currentTimeMillis();
         int vl = fastUseBuffer.getOrDefault(uuid, 0);
 
-        // Verificăm dacă avem înregistrat momentul în care a început interacțiunea
         if (consumeStartTimes.containsKey(uuid)) {
 
-            // Calculăm timpul real (rețea -> finalizare server)
             long timeTaken = now - consumeStartTimes.get(uuid);
             long minLegalTime = MIN_CONSUME_TIME_MS;
 
-            // Excepția jocului: Algele uscate se mănâncă mai repede
             if (consumedItem == Material.DRIED_KELP) {
                 minLegalTime = MIN_KELP_TIME_MS;
             }
 
-            // LOGICA SUPREMĂ:
             if (timeTaken < minLegalTime) {
                 vl++;
                 fastUseBuffer.put(uuid, vl);
 
                 if (vl >= MAX_VIOLATIONS) {
-                    flagPlayer.addFlag(player, "FastUse", "Consumed " + consumedItem.name() + " abnormally fast (" + timeTaken + "ms).");
-                    event.setCancelled(true);
-                    consumeStartTimes.remove(uuid); // Îl forțăm să dea click din nou
+                    flagPlayer.addFlag(player, "FastUse", Lang.text("checks.FastUse.name-fastuse"), Lang.text("checks.FastUse.details-consumed-abnormally-fast-ms", "name", consumedItem.name(), "time-taken", timeTaken));
+                    if (CheckPolicy.cancel("FastUse")) event.setCancelled(true);
+                    consumeStartTimes.remove(uuid); 
 
-                    fastUseBuffer.put(uuid, MAX_VIOLATIONS - 1); // Resetăm pentru a nu spama
+                    fastUseBuffer.put(uuid, MAX_VIOLATIONS - 1); 
                 }
             } else {
-                // Dacă a fost curat, îi curățăm suspiciunile
+
                 if (vl > 0) fastUseBuffer.put(uuid, vl - 1);
 
-                // BUG-FIX: "CHAIN EATING"
-                // Jucătorul ține apăsat click. Serverul consumă item-ul, dar clientul nu va trimite
-                // un nou pachet USE_ITEM pentru următorul măr. Așadar, resetăm timpul ACUM!
                 consumeStartTimes.put(uuid, now);
             }
 
         } else {
-            // InstaEat / AutoConsume Hack extrem: Forțează serverul fără să inițieze animația
+
             vl++;
             fastUseBuffer.put(uuid, vl);
 
             if (vl >= MAX_VIOLATIONS) {
-                flagPlayer.addFlag(player, "FastUse (InstaEat)", "Consumed item without starting the use-animation.");
-                event.setCancelled(true);
+                flagPlayer.addFlag(player, "FastUse", Lang.text("checks.FastUse.name-fastuse-instaeat"), Lang.text("checks.FastUse.details-consumed-item-without-starting-the-use-animation"));
+                if (CheckPolicy.cancel("FastUse")) event.setCancelled(true);
                 fastUseBuffer.put(uuid, MAX_VIOLATIONS - 1);
             }
         }
